@@ -1,0 +1,21 @@
+{
+  "name": "stroycommute",
+  "displayName": "StroyCommute",
+  "author": "",
+  "version": "1.0.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "engines": { "node": ">=24" },
+  "dependencies": {},
+  "pebble": {
+    "displayName": "StroyCommute",
+    "uuid": "1536ae22-1710-418b-9ddb-e43eda1842aa",
+    "projectType": "moddable",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": ["emery"],
+    "watchapp": { "watchface": false },
+    "messageKeys": [],
+    "resources": { "media": [] }
+  }
+}
