@@ -22,7 +22,22 @@ Pebble has two radically different dev stacks:
    - `src/embeddedjs/` : runs ON the watch. Limited embedded-JS-style API,
      no DOM, no full Node APIs.
    - `src/pkjs/` : runs ON the companion phone. Used for networking, geoloc,
-     and relaying to external services. Close to a regular Node environment.
+     and relaying to external services. Close to a regular Node environment
+     **for syntax**, but NOT for built-in modules: confirmed on this
+     project's SDK (pebble-tool v5.0.39 / SDK v4.33.1) that `require("fs")`,
+     `require("path")`, and the global `Buffer` are all unavailable and
+     fatal (no thrown error surfaces in `pebble logs` — the script just
+     silently stops executing right after the `require()` call, no
+     listeners ever register). Root cause: the generated pkjs build uses
+     webpack 1 with a `ProvidePlugin`-injected restricted `require()` shim
+     (`_message_key_wrapper.js`, shipped in the SDK) that only recognizes
+     `"message_keys"` and throws for anything else — real npm packages
+     (e.g. `@moddable/pebbleproxy`) are unaffected since webpack fully
+     bundles their source instead of routing through this shim. Practical
+     consequence: never load a file at runtime via `fs.readFileSync()` in
+     `src/pkjs/` — inline the content as a JS string/template literal
+     instead — and never use `Buffer`; hand-roll any base64/binary encoding
+     needed.
 
 **Hard rule**: if you (Claude) are tempted to suggest C code (`.c`, `Window*`,
 `text_layer_create`, etc.) or a full Node API on the watch side (`fs`, native
