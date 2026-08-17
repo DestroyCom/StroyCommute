@@ -3,3 +3,4 @@ build/
 .pebble-build/
 *.pbw
 .DS_Store
+.env

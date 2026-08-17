@@ -112,6 +112,27 @@ Query: `stop-monitoring?MonitoringRef=STIF:StopPoint:Q:463158:`
   if only one line is wanted, or pass `LineRef` directly as a query
   parameter.
 
+## Traffic alerts — TODO
+
+The `general-message` PRIM endpoint (line/network disruptions) is used
+by the StroyCommute traffic-alerts subsystem, but its JSON response
+shape has never been captured in this repo — unlike `stop-monitoring`
+above, there is no real payload example to work from. Per the project
+rule against guessing API shapes, `fetchLineAlerts()` in
+`src/embeddedjs/main.js` is a stub (returns `[]`) until this is fixed.
+
+Before implementing it for real:
+
+1. Register/confirm PRIM access to the `general-message` endpoint
+   (separate from `stop-monitoring`).
+2. Fetch one real response for a line currently under disruption and
+   paste the raw JSON into this file, in the same style as the
+   `stop-monitoring` example above.
+3. Map the real fields to the `configLine`/`alertForTimeline`
+   AppMessage shapes documented in
+   `docs/superpowers/specs/2026-08-17-stroycommute-scaffold-design.md`.
+4. Update `docs/pebble-idfm-prim/SKILL.md` and this file once verified.
+
 ## Quotas (as of 2024, to re-verify at implementation time)
 
 - Tokens generated before March 13, 2024: 100 req/s, 1,000,000 req/day.
