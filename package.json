@@ -31,6 +31,9 @@
 			"media": []
 		}
 	},
+	"dependencies": {
+		"@moddable/pebbleproxy": "^0.1.0"
+	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.8"
 	}

@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@moddable/pebbleproxy':
+        specifier: ^0.1.0
+        version: 0.1.8
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.5.8
@@ -67,6 +71,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@moddable/pebbleproxy@0.1.8':
+    resolution: {integrity: sha512-Y378u0vM71eskflKOa8xTZ0oVOyJbDRBScZiR1uez+RP5u1KOocBrL+bEShOjVkipfVZNlQnC5DGpzSJhX6O7g==}
+
 snapshots:
 
   '@biomejs/biome@2.5.8':
@@ -103,3 +110,5 @@ snapshots:
 
   '@biomejs/cli-win32-x64@2.5.8':
     optional: true
+
+  '@moddable/pebbleproxy@0.1.8': {}
