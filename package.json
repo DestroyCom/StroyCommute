@@ -12,7 +12,8 @@
 	},
 	"scripts": {
 		"lint": "biome check .",
-		"format": "biome format --write ."
+		"format": "biome format --write .",
+		"postinstall": "patch-package"
 	},
 	"pebble": {
 		"displayName": "StroyCommute",
@@ -35,6 +36,7 @@
 		"@moddable/pebbleproxy": "^0.1.0"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^2.5.8"
+		"@biomejs/biome": "^2.5.8",
+		"patch-package": "^8.0.1"
 	}
 }

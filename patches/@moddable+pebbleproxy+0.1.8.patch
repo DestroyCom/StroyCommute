@@ -1,0 +1,22 @@
+diff --git a/node_modules/@moddable/pebbleproxy/proxy.js b/node_modules/@moddable/pebbleproxy/proxy.js
+index e9b7d95..38d78a1 100644
+--- a/node_modules/@moddable/pebbleproxy/proxy.js
++++ b/node_modules/@moddable/pebbleproxy/proxy.js
+@@ -172,7 +172,7 @@ function httpMessage(id, e) {
+ 			request.xhr.open(request.method, url, true);
+ 			request.xhr.responseType = 'arraybuffer';
+ 
+-			request.headers.split("\n").forEach(line => {
++			request.headers.split("\n").filter(line => line.length > 0).forEach(line => {
+ 				const [key, value] = line.split(":");
+ 				request.xhr.setRequestHeader(key, value);
+ 			});
+@@ -186,7 +186,7 @@ function httpMessage(id, e) {
+ 					[HTTP_BASE + 11]: request.xhr.statusText
+ 				});
+ 
+-				const headers = request.xhr.getAllResponseHeaders().split("\r\n").filter(header => {
++				const headers = request.xhr.getAllResponseHeaders().split("\r\n").filter(header => header.length > 0).filter(header => {
+ 					if ("*" === request.headersMask)
+ 						return true;			// no mask, return all
+ 					header = header.split(":");
