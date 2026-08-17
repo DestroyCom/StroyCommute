@@ -251,6 +251,29 @@ Pebble.addEventListener('appmessage', function (e) {
 
 - [ ] **Step 3: Fetch a header-echo endpoint from embeddedjs**
 
+> **RESOLVED, 2026-08-17 — read before implementing Task 6/7.** This
+> step's original plain-object sample below is confirmed broken: on
+> both the emulator and real emery hardware, `fetch()` never
+> resolves or rejects when `headers` is a plain object (100%
+> reproducible, ~20/20 real-hardware attempts) — a Moddable SDK core
+> bug (`fetch.js` only normalizes `headers` into a `Headers` instance
+> for POST/PUT, not GET), not something this project can patch.
+> **Always construct a `Headers` instance instead** (`const h = new
+> Headers(); h.set("apiKey", value); fetch(url, { headers: h })`).
+> That path also hit two real bugs in `@moddable/pebbleproxy`'s
+> `proxy.js` (an unfiltered trailing-newline producing an empty
+> header name at `setRequestHeader`, and the same pattern crashing
+> the response-header parser) — both fixed locally via `patch-package`
+> (`patches/@moddable+pebbleproxy+0.1.8.patch`, commit `6f5cd8d`,
+> `postinstall: patch-package` wired in `package.json`). Confirmed
+> end-to-end on real hardware: `HTTP 200`, `apiKey` echoed back
+> correctly. Full narrative in
+> `.superpowers/sdd/2026-08-17-stroycommute-scaffold/task-3-report.md`.
+> One residual note for Task 6/7: the patched response-header parser
+> still truncates any response header *value* that itself contains a
+> colon (splits on first `:` only) — pre-existing behavior, not
+> introduced by the patch, not yet hit by real PRIM traffic.
+
 `src/embeddedjs/main.js` (temporary — httpbin.org echoes received
 headers back in its JSON response body, so this directly answers
 whether the header was transmitted):
@@ -258,9 +281,9 @@ whether the header was transmitted):
 ```javascript
 async function spikeCheckCustomHeader() {
   try {
-    const response = await fetch("https://httpbin.org/headers", {
-      headers: { apiKey: "spike-test-value" }
-    });
+    const h = new Headers();
+    h.set("apiKey", "spike-test-value");
+    const response = await fetch("https://httpbin.org/get", { headers: h });
     const json = await response.json();
     console.log("SPIKE headers received by server: " + JSON.stringify(json.headers));
   } catch (e) {
@@ -292,7 +315,8 @@ watch/phone and check `pebble logs` the same way.
 Report back — this blocks PRIM authentication entirely and needs a
 decision (e.g. is there a query-param auth alternative on PRIM's side?
 Per `docs/idfm-api-reference.md`, PRIM auth is header-only, so this
-would be a real architecture blocker, not a minor detail).
+would be a real architecture blocker, not a minor detail). ~~Resolved
+above~~ — kept for historical record of what was originally specified.
 
 - [ ] **Step 5: Revert the spike code, keep the dependency**
 
