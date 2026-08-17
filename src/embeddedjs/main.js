@@ -20,7 +20,7 @@ function draw() {
 		font,
 		black,
 		(render.width - width) / 2,
-		(render.height - font.height) / 2,
+		(render.height - font.height) / 2
 	);
 
 	render.end();

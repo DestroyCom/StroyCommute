@@ -13,6 +13,11 @@
 		"enabled": true,
 		"indentStyle": "tab"
 	},
+	"javascript": {
+		"formatter": {
+			"trailingCommas": "es5"
+		}
+	},
 	"linter": {
 		"enabled": true,
 		"rules": {

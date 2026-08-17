@@ -27,7 +27,20 @@
 		"watchapp": {
 			"watchface": false
 		},
-		"messageKeys": [],
+		"messageKeys": [
+			"itemIndex",
+			"itemCount",
+			"itemType",
+			"apiKey",
+			"scheduleDaysBitmask",
+			"scheduleStartMinutes",
+			"scheduleEndMinutes",
+			"timelineEnabled",
+			"stopRef",
+			"lineRef",
+			"lineName",
+			"stopName"
+		],
 		"resources": {
 			"media": []
 		}

@@ -1,6 +1,313 @@
+// CONFIG_HTML is inlined as a template string rather than read from disk
+// via fs.readFileSync(). This project's pkjs bundler (webpack 1, bundled
+// inside the Pebble SDK's waf build, see build/webpack/pkjs/webpack.config.js)
+// treats "fs"/"path" as Node core externals, which at runtime resolve
+// through a restricted require() shim (_message_key_wrapper.js) that only
+// permits require("message_keys") and throws "Module not found" for
+// anything else. Confirmed by instrumenting index.js with checkpoint
+// console.log calls in the emulator: execution silently died between
+// `require("fs")` and the next line, well before any Pebble.* listener
+// ever ran. Keep config/index.html and this constant in sync by hand.
+const CONFIG_HTML = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>StroyCommute Settings</title>
+<style>
+  body { font-family: sans-serif; margin: 0; padding: 16px; }
+  fieldset { margin-bottom: 16px; }
+  .row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+  .row input, .row select { flex: 1; }
+  button.remove { flex: 0; }
+  #itemCount { font-size: 0.9em; color: #666; }
+</style>
+</head>
+<body>
+  <h2>StroyCommute</h2>
+
+  <fieldset>
+    <legend>Clé API PRIM</legend>
+    <input type="text" id="apiKey" placeholder="Clé API">
+  </fieldset>
+
+  <fieldset>
+    <legend>Arrêts suivis (départs)</legend>
+    <div id="stopsList"></div>
+    <button type="button" onclick="addStopRow()">+ Ajouter un arrêt</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>Lignes suivies (alertes trafic)</legend>
+    <div id="linesList"></div>
+    <button type="button" onclick="addLineRow()">+ Ajouter une ligne</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>Période de réception des alertes</legend>
+    <div class="row">
+      <label><input type="checkbox" class="dayBox" value="1" checked> Lun</label>
+      <label><input type="checkbox" class="dayBox" value="2" checked> Mar</label>
+      <label><input type="checkbox" class="dayBox" value="3" checked> Mer</label>
+      <label><input type="checkbox" class="dayBox" value="4" checked> Jeu</label>
+      <label><input type="checkbox" class="dayBox" value="5" checked> Ven</label>
+      <label><input type="checkbox" class="dayBox" value="6"> Sam</label>
+      <label><input type="checkbox" class="dayBox" value="0"> Dim</label>
+    </div>
+    <div class="row">
+      <label>Début <input type="time" id="scheduleStart" value="07:00"></label>
+      <label>Fin <input type="time" id="scheduleEnd" value="19:30"></label>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Timeline</legend>
+    <label><input type="checkbox" id="timelineEnabled"> Ajouter les infos IDFM (ex: fin d'incident) à la timeline</label>
+  </fieldset>
+
+  <p id="itemCount"></p>
+  <button type="button" onclick="save()">Enregistrer</button>
+
+<script>
+  var MAX_ITEMS = 8;
+
+  function addStopRow(values) {
+    values = values || {};
+    var div = document.createElement("div");
+    div.className = "row stopRow";
+    div.innerHTML =
+      '<input type="text" class="stopRef" placeholder="STIF:StopPoint:Q:..." value="' + (values.stopRef || "") + '">' +
+      '<input type="text" class="stopName" placeholder="Nom arrêt" value="' + (values.stopName || "") + '">' +
+      '<input type="text" class="lineRefStop" placeholder="STIF:Line::..." value="' + (values.lineRef || "") + '">' +
+      '<input type="text" class="lineNameStop" placeholder="Ligne" value="' + (values.lineName || "") + '">' +
+      '<button type="button" class="remove" onclick="this.parentElement.remove(); updateCount();">x</button>';
+    document.getElementById("stopsList").appendChild(div);
+    updateCount();
+  }
+
+  function addLineRow(values) {
+    values = values || {};
+    var div = document.createElement("div");
+    div.className = "row lineRow";
+    div.innerHTML =
+      '<input type="text" class="lineRefAlert" placeholder="STIF:Line::..." value="' + (values.lineRef || "") + '">' +
+      '<input type="text" class="lineNameAlert" placeholder="Ligne" value="' + (values.lineName || "") + '">' +
+      '<button type="button" class="remove" onclick="this.parentElement.remove(); updateCount();">x</button>';
+    document.getElementById("linesList").appendChild(div);
+    updateCount();
+  }
+
+  function updateCount() {
+    var count = document.querySelectorAll(".stopRow").length + document.querySelectorAll(".lineRow").length;
+    document.getElementById("itemCount").textContent = count + " / " + MAX_ITEMS + " éléments suivis";
+  }
+
+  function collectStops() {
+    var rows = document.querySelectorAll(".stopRow");
+    var result = [];
+    rows.forEach(function (row, i) {
+      result.push({
+        id: "stop" + i,
+        stopRef: row.querySelector(".stopRef").value,
+        stopName: row.querySelector(".stopName").value,
+        lineRef: row.querySelector(".lineRefStop").value,
+        lineName: row.querySelector(".lineNameStop").value
+      });
+    });
+    return result;
+  }
+
+  function collectLines() {
+    var rows = document.querySelectorAll(".lineRow");
+    var result = [];
+    rows.forEach(function (row) {
+      result.push({
+        lineRef: row.querySelector(".lineRefAlert").value,
+        lineName: row.querySelector(".lineNameAlert").value
+      });
+    });
+    return result;
+  }
+
+  function save() {
+    var stops = collectStops();
+    var lines = collectLines();
+    if (stops.length + lines.length > MAX_ITEMS) {
+      alert("Maximum " + MAX_ITEMS + " éléments (arrêts + lignes) au total.");
+      return;
+    }
+    var days = [];
+    document.querySelectorAll(".dayBox").forEach(function (box) {
+      if (box.checked) days.push(parseInt(box.value, 10));
+    });
+    var config = {
+      apiKey: document.getElementById("apiKey").value,
+      trackedStops: stops,
+      trackedLines: lines,
+      alertSchedule: {
+        days: days,
+        startTime: document.getElementById("scheduleStart").value,
+        endTime: document.getElementById("scheduleEnd").value
+      },
+      timelineEnabled: document.getElementById("timelineEnabled").checked
+    };
+    var json = JSON.stringify(config);
+    document.location = "pebble://close#" + encodeURIComponent(json);
+  }
+
+  // start with one empty row of each so the form isn't confusingly blank
+  addStopRow();
+  addLineRow();
+</script>
+</body>
+</html>
+`;
+// Node's Buffer isn't available in this pkjs runtime either (confirmed by
+// emulator testing — see CONFIG_HTML comment above), so base64-encode by
+// hand: UTF-8 encode the string to bytes, then standard base64 those bytes.
+function utf8ToBase64(str) {
+	const bytes = [];
+	for (let i = 0; i < str.length; i++) {
+		const code = str.codePointAt(i);
+		if (code > 0xffff) i++; // consume the low surrogate too
+		if (code < 0x80) {
+			bytes.push(code);
+		} else if (code < 0x800) {
+			bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+		} else if (code < 0x10000) {
+			bytes.push(
+				0xe0 | (code >> 12),
+				0x80 | ((code >> 6) & 0x3f),
+				0x80 | (code & 0x3f)
+			);
+		} else {
+			bytes.push(
+				0xf0 | (code >> 18),
+				0x80 | ((code >> 12) & 0x3f),
+				0x80 | ((code >> 6) & 0x3f),
+				0x80 | (code & 0x3f)
+			);
+		}
+	}
+	const chars =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	let output = "";
+	for (let i = 0; i < bytes.length; i += 3) {
+		const b0 = bytes[i];
+		const b1 = i + 1 < bytes.length ? bytes[i + 1] : undefined;
+		const b2 = i + 2 < bytes.length ? bytes[i + 2] : undefined;
+		output += chars[b0 >> 2];
+		output += chars[((b0 & 3) << 4) | (b1 === undefined ? 0 : b1 >> 4)];
+		output +=
+			b1 === undefined
+				? "="
+				: chars[((b1 & 15) << 2) | (b2 === undefined ? 0 : b2 >> 6)];
+		output += b2 === undefined ? "=" : chars[b2 & 63];
+	}
+	return output;
+}
+
+const CONFIG_DATA_URI = `data:text/html;charset=utf-8;base64,${utf8ToBase64(CONFIG_HTML)}`;
+
 const moddableProxy = require("@moddable/pebbleproxy");
 
 Pebble.addEventListener("ready", moddableProxy.readyReceived);
 Pebble.addEventListener("appmessage", (e) => {
 	if (moddableProxy.appMessageReceived(e)) return;
+});
+
+Pebble.addEventListener("showConfiguration", () => {
+	Pebble.openURL(CONFIG_DATA_URI);
+});
+
+Pebble.addEventListener("webviewclosed", (e) => {
+	if (!e.response) return;
+	const config = JSON.parse(decodeURIComponent(e.response));
+	localStorage.setItem("stroycommuteConfig", JSON.stringify(config));
+	sendConfigToWatch(config);
+});
+
+function timeStringToMinutes(hhmm) {
+	const [h, m] = hhmm.split(":").map(Number);
+	return h * 60 + m;
+}
+
+function daysToBitmask(days) {
+	let mask = 0;
+	for (const d of days) mask |= 1 << d;
+	return mask;
+}
+
+function sendConfigToWatch(config) {
+	const itemCount = 1 + config.trackedStops.length + config.trackedLines.length;
+
+	const items = [
+		{
+			itemIndex: 0,
+			itemCount: itemCount,
+			itemType: "configMeta",
+			apiKey: config.apiKey,
+			scheduleDaysBitmask: daysToBitmask(config.alertSchedule.days),
+			scheduleStartMinutes: timeStringToMinutes(config.alertSchedule.startTime),
+			scheduleEndMinutes: timeStringToMinutes(config.alertSchedule.endTime),
+			timelineEnabled: config.timelineEnabled ? 1 : 0,
+		},
+	];
+
+	config.trackedStops.forEach((stop, i) => {
+		items.push({
+			itemIndex: 1 + i,
+			itemCount: itemCount,
+			itemType: "configStop",
+			stopRef: stop.stopRef,
+			lineRef: stop.lineRef,
+			lineName: stop.lineName,
+			stopName: stop.stopName,
+		});
+	});
+
+	config.trackedLines.forEach((line, i) => {
+		items.push({
+			itemIndex: 1 + config.trackedStops.length + i,
+			itemCount: itemCount,
+			itemType: "configLine",
+			lineRef: line.lineRef,
+			lineName: line.lineName,
+		});
+	});
+
+	// Fired back-to-back with no ack-waiting originally; emulator testing
+	// (Task 5 Step 5) showed that drops real messages — the watch received
+	// only 1 of 3 sends, and even that one came back with zero decodable
+	// keys. Chaining each send's ack callback into the next fixed it.
+	sendItemsSequentially(items, 0);
+}
+
+const MAX_SEND_RETRIES = 3;
+
+function sendItemsSequentially(items, index, retriesLeft) {
+	if (index >= items.length) return;
+	if (retriesLeft === undefined) retriesLeft = MAX_SEND_RETRIES;
+	Pebble.sendAppMessage(
+		items[index],
+		() => sendItemsSequentially(items, index + 1),
+		() => {
+			if (retriesLeft > 0) {
+				sendItemsSequentially(items, index, retriesLeft - 1);
+			} else {
+				console.log(
+					"sendAppMessage: giving up on item " +
+						index +
+						" after " +
+						MAX_SEND_RETRIES +
+						" retries"
+				);
+				sendItemsSequentially(items, index + 1);
+			}
+		}
+	);
+}
+
+Pebble.addEventListener("ready", () => {
+	const stored = localStorage.getItem("stroycommuteConfig");
+	if (stored) sendConfigToWatch(JSON.parse(stored));
 });
