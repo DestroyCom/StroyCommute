@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>StroyCommute Settings</title>
+<style>
+  body { font-family: sans-serif; margin: 0; padding: 16px; }
+  fieldset { margin-bottom: 16px; }
+  .row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+  .row input, .row select { flex: 1; }
+  button.remove { flex: 0; }
+  #itemCount { font-size: 0.9em; color: #666; }
+</style>
+</head>
+<body>
+  <h2>StroyCommute</h2>
+
+  <fieldset>
+    <legend>Clé API PRIM</legend>
+    <input type="text" id="apiKey" placeholder="Clé API">
+  </fieldset>
+
+  <fieldset>
+    <legend>Arrêts suivis (départs)</legend>
+    <div id="stopsList"></div>
+    <button type="button" onclick="addStopRow()">+ Ajouter un arrêt</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>Lignes suivies (alertes trafic)</legend>
+    <div id="linesList"></div>
+    <button type="button" onclick="addLineRow()">+ Ajouter une ligne</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>Période de réception des alertes</legend>
+    <div class="row">
+      <label><input type="checkbox" class="dayBox" value="1" checked> Lun</label>
+      <label><input type="checkbox" class="dayBox" value="2" checked> Mar</label>
+      <label><input type="checkbox" class="dayBox" value="3" checked> Mer</label>
+      <label><input type="checkbox" class="dayBox" value="4" checked> Jeu</label>
+      <label><input type="checkbox" class="dayBox" value="5" checked> Ven</label>
+      <label><input type="checkbox" class="dayBox" value="6"> Sam</label>
+      <label><input type="checkbox" class="dayBox" value="0"> Dim</label>
+    </div>
+    <div class="row">
+      <label>Début <input type="time" id="scheduleStart" value="07:00"></label>
+      <label>Fin <input type="time" id="scheduleEnd" value="19:30"></label>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Timeline</legend>
+    <label><input type="checkbox" id="timelineEnabled"> Ajouter les infos IDFM (ex: fin d'incident) à la timeline</label>
+  </fieldset>
+
+  <p id="itemCount"></p>
+  <button type="button" onclick="save()">Enregistrer</button>
+
+<script>
+  var MAX_ITEMS = 8;
+
+  function addStopRow(values) {
+    values = values || {};
+    var div = document.createElement("div");
+    div.className = "row stopRow";
+    div.innerHTML =
+      '<input type="text" class="stopRef" placeholder="STIF:StopPoint:Q:..." value="' + (values.stopRef || "") + '">' +
+      '<input type="text" class="stopName" placeholder="Nom arrêt" value="' + (values.stopName || "") + '">' +
+      '<input type="text" class="lineRefStop" placeholder="STIF:Line::..." value="' + (values.lineRef || "") + '">' +
+      '<input type="text" class="lineNameStop" placeholder="Ligne" value="' + (values.lineName || "") + '">' +
+      '<button type="button" class="remove" onclick="this.parentElement.remove(); updateCount();">x</button>';
+    document.getElementById("stopsList").appendChild(div);
+    updateCount();
+  }
+
+  function addLineRow(values) {
+    values = values || {};
+    var div = document.createElement("div");
+    div.className = "row lineRow";
+    div.innerHTML =
+      '<input type="text" class="lineRefAlert" placeholder="STIF:Line::..." value="' + (values.lineRef || "") + '">' +
+      '<input type="text" class="lineNameAlert" placeholder="Ligne" value="' + (values.lineName || "") + '">' +
+      '<button type="button" class="remove" onclick="this.parentElement.remove(); updateCount();">x</button>';
+    document.getElementById("linesList").appendChild(div);
+    updateCount();
+  }
+
+  function updateCount() {
+    var count = document.querySelectorAll(".stopRow").length + document.querySelectorAll(".lineRow").length;
+    document.getElementById("itemCount").textContent = count + " / " + MAX_ITEMS + " éléments suivis";
+  }
+
+  function collectStops() {
+    var rows = document.querySelectorAll(".stopRow");
+    var result = [];
+    rows.forEach(function (row, i) {
+      result.push({
+        id: "stop" + i,
+        stopRef: row.querySelector(".stopRef").value,
+        stopName: row.querySelector(".stopName").value,
+        lineRef: row.querySelector(".lineRefStop").value,
+        lineName: row.querySelector(".lineNameStop").value
+      });
+    });
+    return result;
+  }
+
+  function collectLines() {
+    var rows = document.querySelectorAll(".lineRow");
+    var result = [];
+    rows.forEach(function (row) {
+      result.push({
+        lineRef: row.querySelector(".lineRefAlert").value,
+        lineName: row.querySelector(".lineNameAlert").value
+      });
+    });
+    return result;
+  }
+
+  function save() {
+    var stops = collectStops();
+    var lines = collectLines();
+    if (stops.length + lines.length > MAX_ITEMS) {
+      alert("Maximum " + MAX_ITEMS + " éléments (arrêts + lignes) au total.");
+      return;
+    }
+    var days = [];
+    document.querySelectorAll(".dayBox").forEach(function (box) {
+      if (box.checked) days.push(parseInt(box.value, 10));
+    });
+    var config = {
+      apiKey: document.getElementById("apiKey").value,
+      trackedStops: stops,
+      trackedLines: lines,
+      alertSchedule: {
+        days: days,
+        startTime: document.getElementById("scheduleStart").value,
+        endTime: document.getElementById("scheduleEnd").value
+      },
+      timelineEnabled: document.getElementById("timelineEnabled").checked
+    };
+    var json = JSON.stringify(config);
+    document.location = "pebble://close#" + encodeURIComponent(json);
+  }
+
+  // start with one empty row of each so the form isn't confusingly blank
+  addStopRow();
+  addLineRow();
+</script>
+</body>
+</html>
