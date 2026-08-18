@@ -1026,12 +1026,19 @@ definition takes over.)
 (Task 5/6) and Task 7 added `state`/`destination`/`minutes`/`atStop`/
 `cancelled` — no new keys needed here, just a receiver:
 
+A single `Message` instance handles both directions for this protocol
+(receive `departureUpdate`, send `refreshStop`) — confirmed as the
+correct embeddedjs-side pattern by Task 12's already-written
+`alertMessage` (`onWritable() {}` + `.write(map)` with a `Map`, not a
+plain object — embeddedjs has no `Pebble.sendAppMessage` global, that's
+a pkjs-only API):
+
 ```javascript
 const departures = new Map();
 
 const departureMessageKeys = [
-  "itemType", "stopRef", "state",
-  "lineName", "destination", "minutes", "atStop", "cancelled"
+  "itemType", "stopRef", "lineRef", "lineName",
+  "state", "destination", "minutes", "atStop", "cancelled"
 ];
 
 const departureMessage = new Message({
@@ -1051,7 +1058,8 @@ const departureMessage = new Message({
       cancelled: !!item.cancelled
     });
     renderCurrentScreen();
-  }
+  },
+  onWritable() {} // required by the Message API even with nothing pending by default
 });
 ```
 
@@ -1069,12 +1077,12 @@ let refreshTimer = null;
 
 function requestRefresh() {
   for (const stop of stops) {
-    Pebble.sendAppMessage({
-      itemType: "refreshStop",
-      stopRef: stop.stopRef,
-      lineRef: stop.lineRef,
-      lineName: stop.lineName
-    });
+    const m = new Map();
+    m.set("itemType", "refreshStop");
+    m.set("stopRef", stop.stopRef);
+    m.set("lineRef", stop.lineRef);
+    m.set("lineName", stop.lineName);
+    departureMessage.write(m);
   }
 }
 
@@ -1091,14 +1099,19 @@ onConfigReady = function () {
 };
 ```
 
-`Pebble.sendAppMessage` here is the watch-side (embeddedjs) API imported
-implicitly as a global, distinct from pkjs's `Pebble.sendAppMessage` used
-in Task 7 — confirm the exact watch-side send API name against
-`docs/pebble-idfm-prim/SKILL.md` / the confirmed AppMessage pattern
-before assuming it matches pkjs's API 1:1; if the watch-side send needs
-a different call shape (e.g. via `pebble/message`'s `Message.write()`
-rather than a global `Pebble.sendAppMessage`), use that instead and note
-the correction here.
+**Watch this on-device test carefully**: Task 5 found that pkjs firing
+multiple `sendAppMessage` calls back-to-back (no ack-wait) drops
+messages — one `onReadable` fired for three sends, decoded empty. This
+loop fires `departureMessage.write()` back-to-back too, from the watch
+side this time; it is not yet confirmed whether the same drop happens in
+this direction. If the on-device test in Step 4 shows dropped/garbled
+`refreshStop` requests (pkjs logs fewer than the expected number, or
+malformed items), apply the same fix Task 5 used: chain each
+`write()`'s completion into the next rather than firing all of them
+immediately — check `Message.write()`'s return value/callback shape
+(the class doc comment in Task 12's snippet says `onWritable` fires when
+the API is ready to accept the next write) rather than guessing at the
+exact chaining mechanism.
 
 - [ ] **Step 4: Manual verification**
 
