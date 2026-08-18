@@ -12,13 +12,28 @@ const CONFIG_HTML = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>StroyCommute Settings</title>
 <style>
-  body { font-family: sans-serif; margin: 0; padding: 16px; }
-  fieldset { margin-bottom: 16px; }
-  .row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
-  .row input, .row select { flex: 1; }
-  button.remove { flex: 0; }
+  * { box-sizing: border-box; }
+  body { font-family: sans-serif; margin: 0; padding: 12px; font-size: 16px; color: #222; }
+  h2 { margin: 4px 0 16px; }
+  fieldset { border: 1px solid #ddd; border-radius: 8px; margin-bottom: 16px; padding: 12px; }
+  legend { font-weight: bold; padding: 0 4px; }
+  input[type="text"], input[type="time"] { width: 100%; font-size: 16px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; margin-top: 4px; }
+  button { font-size: 15px; padding: 10px 14px; border: none; border-radius: 4px; background: #4444ff; color: white; }
+  button.remove { background: #cc4444; padding: 8px 12px; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; padding: 10px; background: #f2f2f6; border-radius: 6px; }
+  .rowLabel { flex: 1; font-size: 15px; }
+  .searchResults { border: 1px solid #ccc; border-radius: 4px; max-height: 220px; overflow-y: auto; margin-top: 4px; }
+  .searchResultItem { padding: 10px; border-bottom: 1px solid #eee; }
+  .searchResultItem:last-child { border-bottom: none; }
+  .searchResultItem:active { background: #e8e8f8; }
+  .searchStatus { padding: 8px; font-size: 0.9em; color: #666; }
+  .dayRow { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 8px; }
+  .dayRow label { display: inline-flex; align-items: center; gap: 4px; }
+  .timeRow { display: flex; gap: 16px; flex-wrap: wrap; }
+  .timeRow label { display: flex; flex-direction: column; font-size: 0.9em; flex: 1; min-width: 120px; }
   #itemCount { font-size: 0.9em; color: #666; }
 </style>
 </head>
@@ -27,24 +42,26 @@ const CONFIG_HTML = `<!DOCTYPE html>
 
   <fieldset>
     <legend>Clé API PRIM</legend>
-    <input type="text" id="apiKey" placeholder="Clé API">
+    <input type="text" id="apiKey" placeholder="Clé API" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false">
   </fieldset>
 
   <fieldset>
     <legend>Arrêts suivis (départs)</legend>
     <div id="stopsList"></div>
-    <button type="button" onclick="addStopRow()">+ Ajouter un arrêt</button>
+    <input type="text" id="stopSearchInput" placeholder="Rechercher un arrêt (ex: Châtelet)" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceSearch('stop')">
+    <div id="stopSearchResults" class="searchResults"></div>
   </fieldset>
 
   <fieldset>
     <legend>Lignes suivies (alertes trafic)</legend>
     <div id="linesList"></div>
-    <button type="button" onclick="addLineRow()">+ Ajouter une ligne</button>
+    <input type="text" id="lineSearchInput" placeholder="Rechercher une ligne (ex: 4, RER A)" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceSearch('line')">
+    <div id="lineSearchResults" class="searchResults"></div>
   </fieldset>
 
   <fieldset>
     <legend>Période de réception des alertes</legend>
-    <div class="row">
+    <div class="dayRow">
       <label><input type="checkbox" class="dayBox" value="1" checked> Lun</label>
       <label><input type="checkbox" class="dayBox" value="2" checked> Mar</label>
       <label><input type="checkbox" class="dayBox" value="3" checked> Mer</label>
@@ -53,7 +70,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
       <label><input type="checkbox" class="dayBox" value="6"> Sam</label>
       <label><input type="checkbox" class="dayBox" value="0"> Dim</label>
     </div>
-    <div class="row">
+    <div class="timeRow">
       <label>Début <input type="time" id="scheduleStart" value="07:00"></label>
       <label>Fin <input type="time" id="scheduleEnd" value="19:30"></label>
     </div>
@@ -69,28 +86,137 @@ const CONFIG_HTML = `<!DOCTYPE html>
 
 <script>
   var MAX_ITEMS = 8;
+  var SEARCH_API = "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/arrets-lignes/records";
+  var searchTimers = {};
 
+  // IDFM's public open-data stop/line search returns ids shaped like
+  // "IDFM:C01374" (line) / "IDFM:463158" (stop point) -- a different
+  // namespace from the PRIM real-time SIRI API's "STIF:Line::C01374:" /
+  // "STIF:StopPoint:Q:463158:" that stop-monitoring actually requires.
+  // Confirmed empirically (not guessed) that the numeric/code suffix after
+  // the colon is identical between both namespaces for the same real
+  // stop/line -- e.g. searching "Châtelet" + line "4" via this API returns
+  // id "IDFM:C01374" and stop_id "IDFM:463158", which are exactly this
+  // project's known-good, already-tested-on-real-hardware PRIM identifiers
+  // once re-wrapped in the STIF format.
+  function idfmIdToStif(rawId, kind) {
+    var suffix = rawId.split(":")[1] || "";
+    return kind === "line" ? "STIF:Line::" + suffix + ":" : "STIF:StopPoint:Q:" + suffix + ":";
+  }
+
+  function escapeHtml(str) {
+    var div = document.createElement("div");
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  // Debounced so a live search fires roughly once per pause in typing, not
+  // once per keystroke -- this hits a real network API on every call.
+  function debounceSearch(kind) {
+    clearTimeout(searchTimers[kind]);
+    var inputEl = document.getElementById(kind + "SearchInput");
+    var resultsEl = document.getElementById(kind + "SearchResults");
+    var query = inputEl.value.trim();
+    if (query.length < 2) {
+      resultsEl.innerHTML = "";
+      return;
+    }
+    searchTimers[kind] = setTimeout(() => {
+      runSearch(kind, query);
+    }, 300);
+  }
+
+  function runSearch(kind, query) {
+    var resultsEl = document.getElementById(kind + "SearchResults");
+    resultsEl.innerHTML = '<div class="searchStatus">Recherche...</div>';
+    // Strip quotes from the query before building the API's "where" clause
+    // -- avoids breaking the clause's own quoting, not a real injection
+    // risk against a read-only public search endpoint, but cheap to do.
+    var safeQuery = query.replace(/"/g, "");
+    var field = kind === "stop" ? "stop_name" : "route_long_name";
+    var url = SEARCH_API + "?where=" + encodeURIComponent(field + ' like "' + safeQuery + '"') + "&limit=" + (kind === "stop" ? 15 : 50);
+    fetch(url)
+      .then((res) => res.json())
+      .then((data) => {
+        renderResults(kind, data.results || []);
+      })
+      .catch(() => {
+        resultsEl.innerHTML = '<div class="searchStatus">Erreur de recherche (vérifie ta connexion).</div>';
+      });
+  }
+
+  function renderResults(kind, results) {
+    var resultsEl = document.getElementById(kind + "SearchResults");
+    var seen = {};
+    var unique = [];
+    if (kind === "line") {
+      // Line search matches once per stop a line serves -- dedupe by line
+      // id so the same line isn't listed dozens of times.
+      results.forEach((r) => {
+        if (!seen[r.id]) {
+          seen[r.id] = true;
+          unique.push(r);
+        }
+      });
+      results = unique.slice(0, 15);
+    }
+    resultsEl.innerHTML = "";
+    if (results.length === 0) {
+      resultsEl.innerHTML = '<div class="searchStatus">Aucun résultat.</div>';
+      return;
+    }
+    results.forEach((r) => {
+      var div = document.createElement("div");
+      div.className = "searchResultItem";
+      div.textContent = kind === "stop"
+        ? r.stop_name + " — ligne " + r.route_long_name + " (" + r.mode + ", " + r.nom_commune + ")"
+        : "Ligne " + r.route_long_name + " (" + r.mode + ", " + r.operatorname + ")";
+      div.onclick = () => {
+        if (kind === "stop") {
+          addStopRow({
+            stopRef: idfmIdToStif(r.stop_id, "stop"),
+            stopName: r.stop_name,
+            lineRef: idfmIdToStif(r.id, "line"),
+            lineName: r.route_long_name
+          });
+        } else {
+          addLineRow({
+            lineRef: idfmIdToStif(r.id, "line"),
+            lineName: r.route_long_name
+          });
+        }
+        document.getElementById(kind + "SearchInput").value = "";
+        resultsEl.innerHTML = "";
+      };
+      resultsEl.appendChild(div);
+    });
+  }
+
+  // Values always come from a search result now (never free-typed), stored
+  // as data-* attributes on the row rather than editable inputs -- this is
+  // what makes a malformed/misspelled stopRef/lineRef structurally
+  // impossible instead of merely validated after the fact.
   function addStopRow(values) {
-    values = values || {};
     var div = document.createElement("div");
     div.className = "row stopRow";
+    div.dataset.stopRef = values.stopRef;
+    div.dataset.stopName = values.stopName;
+    div.dataset.lineRef = values.lineRef;
+    div.dataset.lineName = values.lineName;
     div.innerHTML =
-      '<input type="text" class="stopRef" placeholder="STIF:StopPoint:Q:..." autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" value="' + (values.stopRef || "") + '">' +
-      '<input type="text" class="stopName" placeholder="Nom arrêt" value="' + (values.stopName || "") + '">' +
-      '<input type="text" class="lineRefStop" placeholder="STIF:Line::..." autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" value="' + (values.lineRef || "") + '">' +
-      '<input type="text" class="lineNameStop" placeholder="Ligne" value="' + (values.lineName || "") + '">' +
+      '<span class="rowLabel">' + escapeHtml(values.lineName + " — " + values.stopName) + '</span>' +
       '<button type="button" class="remove" onclick="this.parentElement.remove(); updateCount();">x</button>';
     document.getElementById("stopsList").appendChild(div);
     updateCount();
   }
 
   function addLineRow(values) {
-    values = values || {};
     var div = document.createElement("div");
     div.className = "row lineRow";
+    div.dataset.lineRef = values.lineRef;
+    div.dataset.lineName = values.lineName;
     div.innerHTML =
-      '<input type="text" class="lineRefAlert" placeholder="STIF:Line::..." autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" value="' + (values.lineRef || "") + '">' +
-      '<input type="text" class="lineNameAlert" placeholder="Ligne" value="' + (values.lineName || "") + '">' +
+      '<span class="rowLabel">Ligne ' + escapeHtml(values.lineName) + '</span>' +
       '<button type="button" class="remove" onclick="this.parentElement.remove(); updateCount();">x</button>';
     document.getElementById("linesList").appendChild(div);
     updateCount();
@@ -101,35 +227,16 @@ const CONFIG_HTML = `<!DOCTYPE html>
     document.getElementById("itemCount").textContent = count + " / " + MAX_ITEMS + " éléments suivis";
   }
 
-  // Mobile keyboards (iOS smart punctuation, Android predictive text) can
-  // silently insert a space after ":" while typing an ID like
-  // "STIF:StopPoint:Q:463158:", corrupting it in a way that's easy to miss
-  // visually. IDs never legitimately contain whitespace, so strip all of it
-  // regardless of the input's autocorrect/autocapitalize attributes above
-  // (belt and suspenders -- those attributes reduce but don't guarantee
-  // preventing this on every keyboard).
-  function stripId(value) {
-    return value.replace(/\s+/g, "");
-  }
-
   function collectStops() {
     var rows = document.querySelectorAll(".stopRow");
     var result = [];
-    rows.forEach(function (row, i) {
-      var stopRef = stripId(row.querySelector(".stopRef").value);
-      var lineRef = stripId(row.querySelector(".lineRefStop").value);
-      var stopName = row.querySelector(".stopName").value;
-      var lineName = row.querySelector(".lineNameStop").value;
-      // Skip a row nobody filled in (e.g. the default empty row added by
-      // addStopRow() at page load, left untouched) rather than submitting
-      // it as a real tracked stop.
-      if (!stopRef && !lineRef && !stopName && !lineName) return;
+    rows.forEach((row, i) => {
       result.push({
         id: "stop" + i,
-        stopRef: stopRef,
-        stopName: stopName,
-        lineRef: lineRef,
-        lineName: lineName
+        stopRef: row.dataset.stopRef,
+        stopName: row.dataset.stopName,
+        lineRef: row.dataset.lineRef,
+        lineName: row.dataset.lineName
       });
     });
     return result;
@@ -138,13 +245,10 @@ const CONFIG_HTML = `<!DOCTYPE html>
   function collectLines() {
     var rows = document.querySelectorAll(".lineRow");
     var result = [];
-    rows.forEach(function (row) {
-      var lineRef = stripId(row.querySelector(".lineRefAlert").value);
-      var lineName = row.querySelector(".lineNameAlert").value;
-      if (!lineRef && !lineName) return;
+    rows.forEach((row) => {
       result.push({
-        lineRef: lineRef,
-        lineName: lineName
+        lineRef: row.dataset.lineRef,
+        lineName: row.dataset.lineName
       });
     });
     return result;
@@ -153,16 +257,24 @@ const CONFIG_HTML = `<!DOCTYPE html>
   function save() {
     var stops = collectStops();
     var lines = collectLines();
+    if (stops.length + lines.length === 0) {
+      alert("Ajoute au moins un arrêt ou une ligne avant d'enregistrer.");
+      return;
+    }
     if (stops.length + lines.length > MAX_ITEMS) {
       alert("Maximum " + MAX_ITEMS + " éléments (arrêts + lignes) au total.");
       return;
     }
+    if (!document.getElementById("apiKey").value.trim()) {
+      alert("La clé API PRIM est requise.");
+      return;
+    }
     var days = [];
-    document.querySelectorAll(".dayBox").forEach(function (box) {
+    document.querySelectorAll(".dayBox").forEach((box) => {
       if (box.checked) days.push(parseInt(box.value, 10));
     });
     var config = {
-      apiKey: document.getElementById("apiKey").value,
+      apiKey: document.getElementById("apiKey").value.trim(),
       trackedStops: stops,
       trackedLines: lines,
       alertSchedule: {
@@ -175,10 +287,6 @@ const CONFIG_HTML = `<!DOCTYPE html>
     var json = JSON.stringify(config);
     document.location = "pebblejs://close#" + encodeURIComponent(json);
   }
-
-  // start with one empty row of each so the form isn't confusingly blank
-  addStopRow();
-  addLineRow();
 </script>
 </body>
 </html>
