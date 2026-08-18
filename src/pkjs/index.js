@@ -151,7 +151,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
       timelineEnabled: document.getElementById("timelineEnabled").checked
     };
     var json = JSON.stringify(config);
-    document.location = "pebble://close#" + encodeURIComponent(json);
+    document.location = "pebblejs://close#" + encodeURIComponent(json);
   }
 
   // start with one empty row of each so the form isn't confusingly blank
