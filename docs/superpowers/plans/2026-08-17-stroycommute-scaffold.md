@@ -6,15 +6,21 @@
 metro/tram departures for multiple tracked stops, with a stubbed
 traffic-alerts subsystem — for the `emery` (Pebble Time 2) target.
 
-**Architecture:** embeddedjs (`src/embeddedjs/main.js`) does everything
-data-related: fetches PRIM directly via `fetch()` (transparently proxied
-over Bluetooth by `@moddable/pebbleproxy`), parses SIRI Lite, converts
-UTC timestamps to minutes-remaining, runs the 30-60s refresh timer, and
-renders the Piu UI (button-driven list/detail screens). pkjs
-(`src/pkjs/index.js`) is reduced to three jobs: wire up
-`@moddable/pebbleproxy`, run the config page and persist its result to
-`localStorage` + forward it to the watch via AppMessage, and push
-Pebble Timeline pins when the watch asks it to.
+**Architecture:** (revised 2026-08-18 — see Task 7's note below for why)
+embeddedjs (`src/embeddedjs/main.js`) runs the 30-60s refresh timer and
+renders the Piu UI (button-driven list/detail screens); it does NOT fetch
+or parse PRIM data itself — the timer sends a lightweight `refreshStop`
+AppMessage request per tracked stop to pkjs instead. pkjs
+(`src/pkjs/index.js`) owns: `@moddable/pebbleproxy` wiring (kept for
+potential future embeddedjs-side networking, currently unused by this
+feature), the config page open/persist/forward flow, Pebble Timeline pin
+push, AND (new) the actual PRIM fetch (native `XMLHttpRequest`, no proxy
+needed), SIRI Lite parsing, and UTC→minutes conversion — replying to each
+`refreshStop` request with a compact `departureUpdate` AppMessage item.
+Originally speced with embeddedjs owning the fetch (transparently proxied
+by `@moddable/pebbleproxy`); real-hardware testing found that hits a
+fixed, effectively unconfigurable ~8KB memory ceiling on the watch once a
+real PRIM URL and API key are combined (see Task 7).
 
 **Tech Stack:** Pebble Alloy (Moddable SDK / Piu UI framework), plain JS
 (ES modules on the embeddedjs side, CommonJS on the pkjs side), pnpm,
@@ -35,9 +41,18 @@ pkjs pure functions that are testable outside the Pebble runtime.
   `package.json`), for `node --test` and general tooling.
 - Lint/format: **Biome** (`@biomejs/biome`), configured at the repo
   root, covering `src/`, `config/`, and any `.js`/`.json` files.
-- Fetch, SIRI parsing, UTC→minutes conversion, and the refresh timer
-  live in `src/embeddedjs/main.js`. `src/pkjs/index.js` never fetches
-  or parses PRIM/general-message data.
+- **Revised 2026-08-18**: Fetch, SIRI parsing, and UTC→minutes conversion
+  live in `src/pkjs/index.js` (native `XMLHttpRequest`, no
+  `@moddable/pebbleproxy` needed for this). The refresh timer stays in
+  `src/embeddedjs/main.js` (it's the only side that reliably knows the
+  app is foregrounded) but no longer fetches directly — it sends a
+  `refreshStop` AppMessage request per tracked stop and pkjs replies with
+  a `departureUpdate` item. Originally speced the other way around (fetch
+  in embeddedjs); reversed after real-hardware testing found a fixed,
+  effectively unconfigurable ~8KB chunk-memory ceiling on the watch —
+  see Task 7's note and
+  `.superpowers/sdd/2026-08-17-stroycommute-scaffold/progress.md` for the
+  full investigation.
 - AppMessage: flat items only, one `Message.write()` per item, no
   nested JSON. `messageKeys` in `package.json` is the flat-array-of-
   strings form (not the empty-object form seen in one outlier
@@ -52,14 +67,19 @@ pkjs pure functions that are testable outside the Pebble runtime.
   `Button` sensor (`import Button from "pebble/button"`), not by Piu's
   built-in touch/focus emulation (unverified how that maps buttons to
   focus movement).
-- Never hardcode the PRIM API key; it flows: config page → pkjs
-  `localStorage` → AppMessage → watch memory.
+- Never hardcode the PRIM API key. **Revised 2026-08-18**: it flows
+  config page → pkjs `localStorage` → pkjs's own fetch. It never reaches
+  the watch (no legitimate use for it there once pkjs owns the fetch).
 - Refresh at most every 30-60s, only while the watchapp is foregrounded
-  (Alloy apps don't run in the background).
+  (Alloy apps don't run in the background) — timer stays in embeddedjs
+  for this reason even though the fetch moved to pkjs; do not move the
+  timer to pkjs, which runs whenever the phone has Bluetooth
+  connectivity regardless of whether this watchapp is open.
 - Four states to handle explicitly on stop detail screens: data OK,
   `network` (fetch failed/threw), `noRealtimeData` (empty
   `MonitoredStopVisit`, not an error), `quotaExceeded` (HTTP 429 via
-  `response.status`).
+  `response.status`) — determined pkjs-side now, sent to the watch as
+  the `state` field of a `departureUpdate` item.
 - `docs/idfm-api-reference.md`'s "Traffic alerts — TODO" section must
   stay accurate: `fetchLineAlerts()` stays a stub (`[]` + a `TODO`
   `console.log`) this pass — never invent the `general-message` JSON
@@ -521,6 +541,15 @@ git commit -m "Add StroyCommute config page"
 
 ## Task 5: pkjs — config load/save and forward to watch
 
+> **Amended 2026-08-18** (after Task 7's fetch-architecture move): the
+> `configMeta` item below still includes `apiKey` in this historical
+> spec text, but the real implementation (commit history + Task 7's
+> revision) stops sending it to the watch — pkjs already has it in
+> `localStorage` and now does the fetch itself, so the watch has no
+> further use for it. If revisiting this task's code, drop `apiKey` from
+> the `configMeta` payload sent here (it stays read from `localStorage`
+> inside pkjs, per Task 7).
+
 **Files:**
 - Modify: `src/pkjs/index.js`
 - Modify: `package.json` (`resources.media` entry for the config HTML file, if needed to bundle it — see Step 1)
@@ -688,12 +717,20 @@ git commit -m "pkjs: config page load/save and forward to watch via AppMessage"
 
 ## Task 6: embeddedjs — receive and store config in memory
 
+> **Amended 2026-08-18** (after Task 7's fetch-architecture move): `apiKey`
+> is listed as watch-side state below, matching the original design. The
+> revised architecture has pkjs doing the fetch directly, so the watch
+> never needs `apiKey` at all — if revisiting this task's code, drop the
+> `apiKey` module-level state and stop reading `item.apiKey` in
+> `handleConfigItem` (keep everything else: `stops`, `alertLines`,
+> schedule fields, `onConfigReady`, all still needed).
+
 **Files:**
 - Modify: `src/embeddedjs/main.js`
 
 **Interfaces:**
 - Consumes: the `configMeta`/`configStop`/`configLine` wire format from Task 5.
-- Produces: module-level state — `let stops = []` (array of `{stopRef, lineRef, lineName, stopName}`), `let alertLines = []` (array of `{lineRef, lineName}`), `let apiKey = ""`, `let scheduleDaysBitmask/scheduleStartMinutes/scheduleEndMinutes = 0`, `let timelineEnabled = false`, and a callback hook `function onConfigReady() {}` (redefined by Task 9's list screen to trigger a first render) — Tasks 7, 9, 10, 11 all read this state.
+- Produces: module-level state — `let stops = []` (array of `{stopRef, lineRef, lineName, stopName}`), `let alertLines = []` (array of `{lineRef, lineName}`), `let scheduleDaysBitmask/scheduleStartMinutes/scheduleEndMinutes = 0`, `let timelineEnabled = false`, and a callback hook `function onConfigReady() {}` (redefined by Task 9's list screen to trigger a first render) — Tasks 7, 9, 10, 11 all read this state. (`apiKey` dropped — see note above.)
 
 - [ ] **Step 1: Write the config state section**
 
@@ -777,84 +814,153 @@ git commit -m "embeddedjs: receive and store config from AppMessage"
 
 ---
 
-## Task 7: embeddedjs — PRIM stop-monitoring fetch, parse, convert
+## Task 7: pkjs — PRIM stop-monitoring fetch, parse, convert (revised 2026-08-18)
+
+> **Why this moved from embeddedjs to pkjs.** Originally speced with
+> `fetch()` running watch-side (proxied by `@moddable/pebbleproxy`).
+> Real-hardware testing (Pebble Time 2 / emery) found this reliably
+> crashes with `fxAbort memory full` once a real ~150-char PRIM query
+> string and a real 32-char API key are combined in one request — a
+> fixed, effectively unconfigurable ~8KB XS chunk-memory ceiling on the
+> pebble/emery Alloy host, shared across the whole app. Confirmed not an
+> emulator artifact (reproduced identically on real hardware). Tried and
+> ruled out: patching the two real `@moddable/pebbleproxy` bugs found
+> along the way (necessary but insufficient), tuning the SDK's host
+> `manifest.json` chunk/heap pool sizes (no reliable, monotonic effect —
+> abandoned), switching to the lower-level streaming `HTTPClient` API
+> per `https://developer.repebble.com/guides/alloy/advanced-networking/`
+> (real improvement, ~2 orders of magnitude smaller gap, but still
+> short by a consistent ~16-40 bytes on real hardware). Full
+> investigation: `.superpowers/sdd/2026-08-17-stroycommute-scaffold/progress.md`.
+>
+> pkjs has native `XMLHttpRequest` (confirmed — it's literally what
+> `@moddable/pebbleproxy`'s own `proxy.js` uses for the phone-side leg of
+> proxied requests) and a much larger memory budget, so the fetch, SIRI
+> parsing, and UTC→minutes conversion all move here. This also aligns
+> with `docs/idfm-api-reference.md`'s original note that the UTC
+> conversion belongs in pkjs (full `Intl`/`Date` support), which the
+> original embeddedjs-side design had been inconsistent with from the
+> start.
+>
+> **Known pkjs runtime constraint** (see `docs/pebble-alloy/SKILL.md`):
+> `require("fs")`, `require("path")`, and global `Buffer` are all fatal
+> in this pkjs bundler. `XMLHttpRequest`, `JSON.parse`, `Date`, and
+> `Map` are all fine — none of this task's code touches the restricted
+> Node builtins.
 
 **Files:**
-- Modify: `src/embeddedjs/main.js`
+- Modify: `src/pkjs/index.js`
+- Modify: `package.json` (`pebble.messageKeys` — add the new departures-protocol keys)
 
 **Interfaces:**
-- Consumes: `stops`, `apiKey` from Task 6.
-- Produces: `let departures = new Map()` keyed by `stopRef`, values `{line, destination, minutes, atStop, cancelled, state}` where `state` is one of `"ok" | "network" | "noRealtimeData" | "quotaExceeded"`; and `async function refreshStop(stop)` — called by Task 8's timer, read by Task 9/10's screens.
+- Consumes: the API key from `localStorage.getItem('stroycommuteConfig')` (persisted by Task 5's `webviewclosed` handler — already has everything needed, no new config plumbing required); `refreshStop` request items sent by Task 8's embeddedjs timer.
+- Produces: for each `refreshStop` request received, sends back one `departureUpdate` AppMessage item with `{stopRef, state, lineName, destination, minutes, atStop, cancelled}` where `state` is one of `"ok" | "network" | "noRealtimeData" | "quotaExceeded"` (fields other than `stopRef`/`state` only meaningful when `state === "ok"`). Task 8 (embeddedjs) is the consumer of this exact wire format.
 
-- [ ] **Step 1: Write the fetch + parse section**
+- [ ] **Step 1: Add the new messageKeys**
+
+`package.json`, add to `pebble.messageKeys` (alongside the existing config-protocol keys from Task 5): `"state"`, `"destination"`, `"minutes"`, `"atStop"`, `"cancelled"`. (`itemType`, `stopRef`, `lineRef`, `lineName` already exist and are reused for this protocol too — no `itemIndex`/`itemCount` needed here, each request/response pair is a single self-contained item, not a batch.)
+
+- [ ] **Step 2: Receive `refreshStop` requests**
+
+Add to the existing `appmessage` handler from Task 3/5 (the non-proxy
+branch — edit the existing listener in place, do not register a second
+`'appmessage'` listener):
+
+```javascript
+Pebble.addEventListener('appmessage', function (e) {
+  if (moddableProxy.appMessageReceived(e)) return;
+  if (e.payload.itemType === "refreshStop") {
+    handleRefreshStop(e.payload);
+  }
+});
+```
+
+- [ ] **Step 3: Write the fetch + parse + respond section**
 
 Field mapping is from `docs/idfm-api-reference.md`'s table — read it
 alongside this step if anything here looks off, don't re-derive it from
-memory:
+memory. Uses native `XMLHttpRequest` (pkjs has this directly, no proxy
+needed — confirmed by reading `@moddable/pebbleproxy`'s own `proxy.js`,
+which uses this exact same API for its phone-side leg):
 
 ```javascript
-const departures = new Map();
+function handleRefreshStop(request) {
+  const stored = localStorage.getItem('stroycommuteConfig');
+  const apiKey = stored ? JSON.parse(stored).apiKey : "";
 
-async function refreshStop(stop) {
   const url = "https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring"
-    + "?MonitoringRef=" + encodeURIComponent(stop.stopRef)
-    + "&LineRef=" + encodeURIComponent(stop.lineRef);
+    + "?MonitoringRef=" + encodeURIComponent(request.stopRef)
+    + "&LineRef=" + encodeURIComponent(request.lineRef);
 
-  try {
-    const response = await fetch(url, { headers: { apiKey: apiKey } });
-
-    if (response.status === 429) {
-      departures.set(stop.stopRef, { state: "quotaExceeded" });
+  const xhr = new XMLHttpRequest();
+  xhr.open("GET", url, true);
+  xhr.setRequestHeader("apiKey", apiKey);
+  xhr.onload = function () {
+    if (xhr.status === 429) {
+      sendDepartureUpdate(request.stopRef, "quotaExceeded");
       return;
     }
-    if (!response.ok) {
-      departures.set(stop.stopRef, { state: "network" });
-      return;
-    }
-
-    const json = await response.json();
-    const visits = json.Siri.ServiceDelivery.StopMonitoringDelivery[0].MonitoredStopVisit;
-
-    if (!visits || visits.length === 0) {
-      departures.set(stop.stopRef, { state: "noRealtimeData" });
+    if (xhr.status < 200 || xhr.status >= 300) {
+      sendDepartureUpdate(request.stopRef, "network");
       return;
     }
 
-    const visit = visits[0];
-    const journey = visit.MonitoredVehicleJourney;
-    const call = journey.MonitoredCall;
+    try {
+      const json = JSON.parse(xhr.responseText);
+      const visits = json.Siri.ServiceDelivery.StopMonitoringDelivery[0].MonitoredStopVisit;
 
-    const cancelled = call.DepartureStatus === "cancelled";
-    const atStop = call.VehicleAtStop === true;
-    let minutes;
-    if (atStop) {
-      minutes = -1;
-    } else {
-      const expected = new Date(call.ExpectedArrivalTime);
-      minutes = Math.round((expected.getTime() - Date.now()) / 60000);
+      if (!visits || visits.length === 0) {
+        sendDepartureUpdate(request.stopRef, "noRealtimeData");
+        return;
+      }
+
+      const visit = visits[0];
+      const journey = visit.MonitoredVehicleJourney;
+      const call = journey.MonitoredCall;
+
+      const cancelled = call.DepartureStatus === "cancelled";
+      const atStop = call.VehicleAtStop === true;
+      let minutes;
+      if (atStop) {
+        minutes = -1;
+      } else {
+        // Node has full Date support in pkjs — this is why the
+        // conversion lives here, not in embeddedjs.
+        const expected = new Date(call.ExpectedArrivalTime);
+        minutes = Math.round((expected.getTime() - Date.now()) / 60000);
+      }
+
+      sendDepartureUpdate(request.stopRef, "ok", {
+        lineName: request.lineName,
+        destination: call.DestinationDisplay ? call.DestinationDisplay[0].value : "",
+        minutes: minutes,
+        atStop: atStop,
+        cancelled: cancelled
+      });
+    } catch (e) {
+      sendDepartureUpdate(request.stopRef, "network");
     }
-
-    departures.set(stop.stopRef, {
-      state: "ok",
-      line: stop.lineName,
-      destination: call.DestinationDisplay ? call.DestinationDisplay[0].value : "",
-      minutes: minutes,
-      atStop: atStop,
-      cancelled: cancelled
-    });
-  } catch (e) {
-    departures.set(stop.stopRef, { state: "network" });
-  }
+  };
+  xhr.onerror = function () {
+    sendDepartureUpdate(request.stopRef, "network");
+  };
+  xhr.send();
 }
 
-async function refreshAllStops() {
-  for (const stop of stops) {
-    await refreshStop(stop);
-  }
+function sendDepartureUpdate(stopRef, state, extra) {
+  const payload = Object.assign({
+    itemType: "departureUpdate",
+    stopRef: stopRef,
+    state: state
+  }, extra || {});
+  Pebble.sendAppMessage(payload);
 }
 ```
 
-- [ ] **Step 2: Verify against the real payload example**
+`request.lineName` is echoed back from the `refreshStop` request rather
+than re-derived, since pkjs doesn't otherwise need to look it up.
+
+- [ ] **Step 4: Verify against the real payload example**
 
 Cross-check this parsing code line-by-line against the JSON example in
 `docs/idfm-api-reference.md` (the `Siri.ServiceDelivery.
@@ -864,35 +970,41 @@ MonitoredCall` path) — confirm every field accessed here
 `DestinationDisplay[0].value`) exists at that exact path in the
 documented example.
 
-- [ ] **Step 3: Manual on-device test**
+- [ ] **Step 5: Manual on-device test**
 
-Since there's no automated test for embeddedjs (Global Constraints /
-spec), verify manually: temporarily call `refreshAllStops()` once at
-startup with a hardcoded test stop (a real `stopRef`/`lineRef` you have
-access to, and a real API key entered via the config page from Task 5),
-build, install, `pebble logs`, and `console.log(JSON.stringify(Array.from(departures.entries())))`
-after the call resolves. Confirm the shape matches what's expected.
-Remove the temporary hardcoded call once confirmed (Task 8 wires up the
-real timer-driven version).
+No automated test for pkjs's network code (Global Constraints /
+spec — same as embeddedjs). Verify manually with a real API key (already
+in `.env` for this project, `IDFM_API_KEY`) and a real stop/line
+(`STIF:StopPoint:Q:463158:` / `STIF:Line::C01374:`, Châtelet, matches
+`docs/idfm-api-reference.md`'s own example): this task cannot be fully
+exercised standalone since it needs a `refreshStop` request to arrive —
+either wait for Task 8's timer to send one for real, or temporarily
+inject one via `pebble send-app-message` (established in Task 6's
+testing) with `itemType=refreshStop`, a real `stopRef`/`lineRef`. Check
+`pebble logs` for the resulting `departureUpdate` — confirm real
+departure data (or a correctly-handled error state) comes back, not a
+crash. This task has much more memory headroom than the old
+embeddedjs-side attempt, but confirm on real hardware if available
+(`pebble install --cloudpebble`), not just the emulator.
 
-- [ ] **Step 4: Lint and commit**
+- [ ] **Step 6: Lint and commit**
 
 ```bash
 pnpm run lint
-git add src/embeddedjs/main.js
-git commit -m "embeddedjs: fetch, parse, and convert PRIM stop-monitoring data"
+git add src/pkjs/index.js package.json
+git commit -m "pkjs: fetch, parse, and convert PRIM stop-monitoring data"
 ```
 
 ---
 
-## Task 8: embeddedjs — refresh timer
+## Task 8: embeddedjs — refresh timer (revised 2026-08-18: sends requests, doesn't fetch)
 
 **Files:**
 - Modify: `src/embeddedjs/main.js`
 
 **Interfaces:**
-- Consumes: `refreshAllStops()` from Task 7, `configLoaded`/`onConfigReady` from Task 6.
-- Produces: a running 45s timer once config is loaded; re-renders the UI after each refresh (calls `renderCurrentScreen()`, a function Task 9 defines — this task adds a no-op stub for it if Task 9 hasn't run yet, so this task's own verification doesn't depend on Task 9's completion).
+- Consumes: `stops`, `configLoaded`/`onConfigReady` from Task 6; replies from Task 7 (pkjs).
+- Produces: `let departures = new Map()` keyed by `stopRef`, values `{state, line, destination, minutes, atStop, cancelled}` (mirrors Task 7's `departureUpdate` shape, `line` renamed from the wire's `lineName` for brevity — Task 9/10's screens read this), a `Message` listener that receives `departureUpdate` items, and a running 45s timer once config is loaded that sends one `refreshStop` request per tracked stop and re-renders the UI after each round (calls `renderCurrentScreen()`, a function Task 9 defines — this task adds a no-op stub for it if Task 9 hasn't run yet, so this task's own verification doesn't depend on Task 9's completion).
 
 - [ ] **Step 1: Add the stub render hook (only if not already defined)**
 
@@ -908,40 +1020,101 @@ if (typeof renderCurrentScreen === "undefined") {
 (Once Task 9 exists, delete this stub — its own `renderCurrentScreen`
 definition takes over.)
 
-- [ ] **Step 2: Wire the timer into `onConfigReady`**
+- [ ] **Step 2: Declare the departure-response messageKeys, receive `departureUpdate`**
+
+`package.json`'s `pebble.messageKeys` already has `stopRef`/`lineName`
+(Task 5/6) and Task 7 added `state`/`destination`/`minutes`/`atStop`/
+`cancelled` — no new keys needed here, just a receiver:
+
+```javascript
+const departures = new Map();
+
+const departureMessageKeys = [
+  "itemType", "stopRef", "state",
+  "lineName", "destination", "minutes", "atStop", "cancelled"
+];
+
+const departureMessage = new Message({
+  keys: departureMessageKeys,
+  onReadable() {
+    const msg = this.read();
+    const item = {};
+    msg.forEach((value, key) => { item[key] = value; });
+    if (item.itemType !== "departureUpdate") return;
+
+    departures.set(item.stopRef, {
+      state: item.state,
+      line: item.lineName,
+      destination: item.destination,
+      minutes: item.minutes,
+      atStop: !!item.atStop,
+      cancelled: !!item.cancelled
+    });
+    renderCurrentScreen();
+  }
+});
+```
+
+Note this is a second `Message` instance alongside Task 6's
+`configMessage` — both listen on disjoint key subsets of the same
+`messageKeys` pool (a documented watch item from the plan's pre-flight
+scan; Task 1's `hellomessage` example only ever showed one instance
+whose keys exactly equal the full pool, so this is unverified until this
+step's on-device test confirms both instances coexist correctly).
+
+- [ ] **Step 3: Send `refreshStop` requests from the timer**
 
 ```javascript
 let refreshTimer = null;
 
+function requestRefresh() {
+  for (const stop of stops) {
+    Pebble.sendAppMessage({
+      itemType: "refreshStop",
+      stopRef: stop.stopRef,
+      lineRef: stop.lineRef,
+      lineName: stop.lineName
+    });
+  }
+}
+
 function startRefreshTimer() {
   if (refreshTimer) return;
-  refreshTimer = setInterval(async function () {
-    await refreshAllStops();
-    renderCurrentScreen();
-  }, 45000);
+  refreshTimer = setInterval(requestRefresh, 45000);
 }
 
 const previousOnConfigReady = onConfigReady;
 onConfigReady = function () {
   previousOnConfigReady();
-  refreshAllStops().then(renderCurrentScreen);
+  requestRefresh();
   startRefreshTimer();
 };
 ```
 
-- [ ] **Step 3: Manual verification**
+`Pebble.sendAppMessage` here is the watch-side (embeddedjs) API imported
+implicitly as a global, distinct from pkjs's `Pebble.sendAppMessage` used
+in Task 7 — confirm the exact watch-side send API name against
+`docs/pebble-idfm-prim/SKILL.md` / the confirmed AppMessage pattern
+before assuming it matches pkjs's API 1:1; if the watch-side send needs
+a different call shape (e.g. via `pebble/message`'s `Message.write()`
+rather than a global `Pebble.sendAppMessage`), use that instead and note
+the correction here.
+
+- [ ] **Step 4: Manual verification**
 
 Build, install, save config with a real stop, `pebble logs`, confirm
-(via a temporary `console.log` inside the `setInterval` callback) that
-a refresh fires roughly every 45s while the app stays foregrounded.
-Remove the temporary log once confirmed.
+(via the `departureUpdate` log line, or a temporary log inside
+`onReadable`) that a `refreshStop` request goes out roughly every 45s
+while the app stays foregrounded, and a matching `departureUpdate`
+comes back and updates `departures`. Remove any temporary log once
+confirmed.
 
-- [ ] **Step 4: Lint and commit**
+- [ ] **Step 5: Lint and commit**
 
 ```bash
 pnpm run lint
-git add src/embeddedjs/main.js
-git commit -m "embeddedjs: 45s refresh timer"
+git add src/embeddedjs/main.js package.json
+git commit -m "embeddedjs: 45s refresh timer, request/receive departures via AppMessage"
 ```
 
 ---

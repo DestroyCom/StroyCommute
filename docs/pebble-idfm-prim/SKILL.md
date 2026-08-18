@@ -11,25 +11,41 @@ description: >
 
 ## Mandatory architecture
 
-**Corrected 2026-08-17** after verifying against official Alloy docs and
-the real `hellofetch` example — the original version of this rule
-("pkjs is the only place that fetches") was wrong for Alloy and has been
-reversed:
+**Corrected again 2026-08-18** after real-hardware testing (see
+`.superpowers/sdd/2026-08-17-stroycommute-scaffold/progress.md`'s Task 7
+section for the full investigation) — the 2026-08-17 version of this rule
+below (embeddedjs fetches, pkjs is a transparent relay) turned out to hit
+a fixed, effectively unconfigurable ~8KB memory ceiling on the pebble/
+emery Alloy host once a real PRIM URL and a real API key are combined in
+one `fetch()`. Confirmed on real hardware, not an emulator artifact. The
+architecture is reversed again, back to pkjs owning the fetch — but this
+time confirmed by hitting a real, reproducible constraint, not guessed:
 
-- **embeddedjs (watch)** : the only place that fetches the PRIM API,
-  using `fetch()`. Also does the SIRI Lite parsing and the UTC→minutes
-  conversion, since it already holds the raw response.
-- **pkjs (phone)** : does NOT fetch or parse PRIM data. It wires up
-  `@moddable/pebbleproxy` (`readyReceived`/`appMessageReceived`) as a
-  transparent network relay — `fetch()` calls made in embeddedjs are
-  proxied over Bluetooth through the phone automatically, with no
-  request-specific phone-side code needed. pkjs also owns the config
-  page (API key, tracked stops/lines) and Pebble Timeline pin pushes.
+- **pkjs (phone)** : the one that fetches the PRIM API, using native
+  `XMLHttpRequest` (confirmed available directly in pkjs — it's exactly
+  what `@moddable/pebbleproxy`'s own `proxy.js` uses for its phone-side
+  leg, no proxy needed for pkjs's own outgoing requests). Also does the
+  SIRI Lite parsing and the UTC→minutes conversion, since it now holds
+  the raw response and has full `Intl`/`Date` support. Triggered by
+  `refreshStop` AppMessage requests from the watch (one per tracked
+  stop), replies with a `departureUpdate` item. Also still owns
+  `@moddable/pebbleproxy` wiring (kept for potential future
+  embeddedjs-side networking, unused by this feature currently), the
+  config page, and Pebble Timeline pin pushes.
+- **embeddedjs (watch)** : does NOT fetch or parse PRIM data. Owns the
+  30-60s refresh timer (it's the only side that reliably knows the app
+  is foregrounded — do not move the timer to pkjs, which runs whenever
+  the phone has Bluetooth connectivity regardless of whether this
+  watchapp is open) — the timer sends `refreshStop` requests and stores
+  incoming `departureUpdate` replies in a `departures` Map for the UI.
 
-Never suggest doing the HTTP fetch or JSON parsing on the pkjs side for
-departure/alert data — that's the reversed mistake now. See
+The API key never reaches the watch under this architecture — it's read
+by pkjs from its own `localStorage` at fetch time. See
 `docs/superpowers/specs/2026-08-17-stroycommute-scaffold-design.md` for
-the full verified/unverified API table and data flow.
+the config protocol (still accurate) — the departures request/response
+protocol is documented in the plan's Task 7/8
+(`docs/superpowers/plans/2026-08-17-stroycommute-scaffold.md`) until the
+design spec doc is updated to match.
 
 ## PRIM API — key points
 
@@ -47,9 +63,11 @@ the full verified/unverified API table and data flow.
     (gives a single direction), or `STIF:StopArea:SP:<id>:` for a stop
     area (all platforms/directions).
 - Quota: limited per day depending on the PRIM account. **Never fetch more
-  often than every 30-60s from embeddedjs**, and only while the watchapp
-  is actually open/visible (Alloy apps aren't running in the background
-  anyway).
+  often than every 30-60s**, and only while the watchapp is actually
+  open/visible on the watch — the timer that gates this lives in
+  embeddedjs (see Mandatory architecture above) even though the fetch
+  itself runs in pkjs, specifically so a closed watchapp doesn't keep
+  polling PRIM in the background.
 
 ## Tracked stops configuration
 
@@ -65,26 +83,40 @@ the exact item shapes.
 
 ## Watch <-> phone AppMessage format
 
-AppMessage now carries **config** phone→watch (API key, tracked
-stops/lines, alert schedule), not parsed departure data — the watch
-fetches and parses PRIM data itself. See the spec above for the full
-`configMeta`/`configStop`/`configLine` item shapes and the
-`alertForTimeline` watch→phone message used once traffic alerts are
-implemented for real.
+AppMessage now carries traffic in both directions:
+- **phone→watch (config)**: API key, tracked stops/lines, alert schedule
+  — sent once on config save and again on every pkjs `ready` (from
+  persisted `localStorage`). See the spec above for the full
+  `configMeta`/`configStop`/`configLine` item shapes.
+- **watch→phone (`refreshStop`)**: one item per tracked stop, sent by
+  embeddedjs's timer — `{itemType: "refreshStop", stopRef, lineRef,
+  lineName}`.
+- **phone→watch (`departureUpdate`)**: pkjs's reply to each `refreshStop`
+  — `{itemType: "departureUpdate", stopRef, state, lineName, destination,
+  minutes, atStop, cancelled}`.
+- **watch→phone (`alertForTimeline`)**: used once traffic alerts are
+  implemented for real (currently dormant, `fetchLineAlerts()` is a stub
+  in embeddedjs).
 
-Convert `ExpectedArrivalTime` (ISO 8601) to minutes remaining in
-embeddedjs, right after fetching — that's where the raw SIRI response
-lands.
+The API key never travels watch-bound — pkjs reads it from its own
+`localStorage` at fetch time, no `apiKey` AppMessage item is ever sent to
+the watch.
+
+Convert `ExpectedArrivalTime` (ISO 8601) to minutes remaining in pkjs,
+right after fetching — that's where the raw SIRI response now lands, and
+pkjs has full `Intl`/`Date` support (embeddedjs doesn't).
 
 ## Error handling (common with this API)
 
-- Network timeout on the watch's `fetch()` → show an explicit error
-  state rather than leaving a blank or stale screen with no indication.
+- Network timeout on pkjs's `XMLHttpRequest` → sent to the watch as
+  `state: "network"` in the `departureUpdate` item, shown as an explicit
+  error state rather than a blank or stale screen with no indication.
 - A stop with no real-time data available (partial network coverage, per
-  PRIM docs) → provide a "no real-time data for this stop" state distinct
-  from "network error".
-- Quota exceeded (HTTP 429 or equivalent, checked via `response.status`)
-  → back off, don't re-fetch in a loop.
+  PRIM docs) → `state: "noRealtimeData"`, distinct from `"network"`.
+- Quota exceeded (HTTP 429, checked via `xhr.status` in pkjs) →
+  `state: "quotaExceeded"`; the watch's 45s timer already rate-limits
+  requests, don't add a separate pkjs-side backoff on top without a
+  reason to.
 
 ## Before generating code
 
