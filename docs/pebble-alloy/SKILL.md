@@ -127,22 +127,49 @@ see `src/embeddedjs/main.js`'s `tryWriteRefreshStop`/`flushRefreshQueue`.
 - pkjs has a different lifecycle than embeddedjs: it restarts on Bluetooth
   reconnection, no guaranteed persistent state between sessions.
 - **Individual AppMessage items can still vanish even with ack-chained
-  sends** (confirmed on-device, Task 7/8 testing, emulator). Task 5
-  already found that firing `Pebble.sendAppMessage()` back-to-back without
-  waiting for acks drops messages, and fixed it by chaining each send
-  through its success/fail callback (`sendItemsSequentially` in
-  `src/pkjs/index.js`). That chaining reduces but does not eliminate the
-  problem: in repeated Task 7/8 emulator runs, a single item out of a
-  4-item ack-chained config send (`configMeta` + 3×`configStop`) was
-  silently lost roughly 1 in 3 runs — pkjs's own ack fired successfully
-  (it believes the send succeeded), but the watch's corresponding
-  `Message`'s `onReadable` simply never fired for that item, no error
-  either side. Not yet root-caused or fixed (out of Task 7/8's scope,
-  which only covers the separate watch→phone `refreshStop` direction —
-  see the `Message.write()` entry above). Any future work needing
-  guaranteed multi-item delivery should design for this (e.g. an
-  itemCount/received-set reconciliation with a resend-missing-items
-  request) rather than assuming the ack chain alone is reliable.
+  sends — root-caused and fixed (Task 8b).** Task 5 already found that
+  firing `Pebble.sendAppMessage()` back-to-back without waiting for acks
+  drops messages, and fixed it by chaining each send through its
+  success/fail callback (`sendItemsSequentially` in `src/pkjs/index.js`).
+  That chaining reduces but does not eliminate the problem: in repeated
+  Task 7/8 emulator runs, a single item out of a 4-item ack-chained
+  config send was silently lost roughly 1 in 3 runs — pkjs's own ack
+  fired successfully (it believes the send succeeded), but the watch's
+  corresponding `Message`'s `onReadable` simply never fired for that
+  item, no error either side. Root cause (Task 8b, instrumented logging
+  on both sides): pkjs's `onAck` for item N can fire and trigger item
+  N+1's `sendAppMessage` within single-digit milliseconds — faster than
+  the watch's embeddedjs side can drain one AppMessage inbox item via
+  `onReadable`/`read()` before the next write lands, silently
+  overwriting a single-slot inbound buffer (the receive-side mirror of
+  the already-documented single-slot *outbound* constraint above).
+  Fixed with two layers, both in place: (1) `CONFIG_SEND_GAP_MS = 200`
+  in `sendItemsSequentially` — a short delay between an item's ack and
+  the next item's send, closing the race in practice (2/10 losses on a
+  clean baseline vs. 0/10 with the gap, contamination-checked
+  methodology, see `.superpowers/sdd/2026-08-17-stroycommute-scaffold/
+  task-8b-report.md`); (2) a watch-side `configResendRequest`
+  reconciliation safety net (`src/embeddedjs/main.js`) as defense in
+  depth for whatever the timing fix still misses — armed only during a
+  session's first config load, 4000ms timeout, capped at 3 attempts,
+  reuses the existing `itemType` field (no new messageKey). A first
+  version of the reconciliation logic had its own blind spot (fixed in
+  the same task's review fix-round): the original completion check only
+  verified the *last* item by index had arrived, not that *every* item
+  had — so a lost *middle* item could still silently produce an
+  incomplete `stops`/`alertLines` with no resend triggered. Fixed by
+  tracking a `Set` of received item indices and completing only when
+  its size matches the expected count. Any future `Message` instance in
+  this file with a similar "did the whole batch arrive" completion
+  check should use the same received-set pattern, not a
+  last-index-arrived shortcut. Known minor residual (deferred, not yet
+  seen in practice): the same duplicate-delivery race that motivated
+  this fix could in principle still push a duplicate entry into
+  `pendingStops`/`pendingLines` (the Set protects the completion count,
+  not the underlying arrays) or, if it strikes after a batch has
+  already completed, could theoretically re-fire `onConfigReady()` —
+  both narrow and non-crashing, worth a dedup pass if ever observed on
+  real hardware (all testing so far is emulator-only).
 
 ## Before generating code
 
