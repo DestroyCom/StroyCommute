@@ -1,4 +1,4 @@
-import Poco from "commodetto/Poco";
+import Button from "pebble/button";
 import Message from "pebble/message";
 
 console.log("Hello, Watchface.");
@@ -248,9 +248,9 @@ function handleConfigItem(item) {
 // embeddedjs since it's the only side that reliably knows the app is
 // foregrounded — Alloy apps aren't running otherwise.
 
-// Real implementation lands in Task 9; stubbed here so this task is
-// independently testable without depending on Task 9's completion.
-const renderCurrentScreen = () => {};
+// Real implementation is in the "Piu UI — list screen" section below
+// (declared as a `function`, hoisted, so this forward reference from
+// departureMessage's onReadable further down resolves fine).
 
 const departures = new Map();
 
@@ -367,28 +367,158 @@ onConfigReady = () => {
 	startRefreshTimer();
 };
 
-const render = new Poco(screen);
+// --- Piu UI — list screen ---
+// The first real Piu UI screen this project builds. Replaces the placeholder
+// Poco clock face (raw `render.begin()/fillRectangle/drawText/end()` on
+// `secondchange`, formerly here) entirely rather than running alongside it —
+// a full Piu `Application` owns the display's render list once created (see
+// `PiuView`'s constructor setting `screen.context = this`), and a second,
+// unrelated direct-draw loop on the same `screen` would fight it for the
+// same framebuffer. `Skin`/`Style`/`Container`/`Label`/`Application` need no
+// import: the SDK's pebble host (`build/devices/pebble/host/main.js`)
+// injects them as globals into every app module's scope via `import {} from
+// "piu/MC"` — confirmed by reading that file directly, not guessed. `Button`
+// is the one exception, not in that globals list, hence the explicit
+// `import Button from "pebble/button"` above (also confirmed against the
+// SDK's own `setup/piu.js`, which imports it the same way).
 
-const font = new render.Font("Bitham-Black", 30);
-const black = render.makeColor(0, 0, 0);
-const white = render.makeColor(255, 255, 255);
+const whiteSkin = new Skin({ fill: "white" });
+const highlightSkin = new Skin({ fill: "#4444FF" });
+const rowStyle = new Style({ font: "18px Gothic", color: "black" });
+const rowStyleSelected = new Style({ font: "18px Gothic", color: "white" });
 
-function draw() {
-	render.begin();
-	render.fillRectangle(white, 0, 0, render.width, render.height);
-
-	const msg = new Date().toTimeString().slice(0, 8);
-	const width = render.getTextWidth(msg, font);
-
-	render.drawText(
-		msg,
-		font,
-		black,
-		(render.width - width) / 2,
-		(render.height - font.height) / 2
-	);
-
-	render.end();
+function buildItemList() {
+	const items = [];
+	for (const stop of stops) {
+		items.push({
+			type: "stop",
+			stopRef: stop.stopRef,
+			lineName: stop.lineName,
+			stopName: stop.stopName,
+		});
+	}
+	for (const line of alertLines) {
+		items.push({
+			type: "alert",
+			lineRef: line.lineRef,
+			lineName: line.lineName,
+		});
+	}
+	return items;
 }
 
-watch.addEventListener("secondchange", draw);
+function rowLabel(item) {
+	if (item.type === "stop") {
+		const dep = departures.get(item.stopRef);
+		let status = "...";
+		if (dep) {
+			if (dep.state === "ok")
+				status = dep.atStop ? "à quai" : `${dep.minutes} min`;
+			else if (dep.state === "network") status = "erreur réseau";
+			else if (dep.state === "noRealtimeData") status = "pas de temps réel";
+			else if (dep.state === "quotaExceeded") status = "quota dépassé";
+		}
+		return `${item.lineName}  ${item.stopName}  ${status}`;
+	}
+	return `${item.lineName}  alertes (bientôt)`;
+}
+
+let selectedIndex = 0;
+let currentScreenMode = "list"; // "list" | "detail", read/written by Task 10 too
+
+const application = new Application(null, {
+	left: 0,
+	right: 0,
+	top: 0,
+	bottom: 0,
+	skin: whiteSkin,
+});
+
+function buildListScreen() {
+	const items = buildItemList();
+	if (items.length === 0) {
+		return new Container(null, {
+			left: 0,
+			right: 0,
+			top: 0,
+			bottom: 0,
+			skin: whiteSkin,
+			contents: [
+				new Label(null, {
+					top: 60,
+					left: 8,
+					right: 8,
+					style: rowStyle,
+					string: "Aucun arrêt configuré",
+				}),
+			],
+		});
+	}
+
+	const windowStart = Math.max(
+		0,
+		Math.min(selectedIndex - 1, items.length - 3)
+	);
+	const visibleCount = Math.min(3, items.length);
+	const rowContents = [];
+	for (let i = 0; i < visibleCount; i++) {
+		const absoluteIndex = windowStart + i;
+		if (absoluteIndex >= items.length) break;
+		const item = items[absoluteIndex];
+		const selected = absoluteIndex === selectedIndex;
+		rowContents.push(
+			new Container(null, {
+				left: 0,
+				right: 0,
+				top: i * 50,
+				height: 50,
+				skin: selected ? highlightSkin : whiteSkin,
+				contents: [
+					new Label(null, {
+						left: 8,
+						top: 15,
+						style: selected ? rowStyleSelected : rowStyle,
+						string: rowLabel(item),
+					}),
+				],
+			})
+		);
+	}
+
+	return new Container(null, {
+		left: 0,
+		right: 0,
+		top: 0,
+		bottom: 0,
+		skin: whiteSkin,
+		contents: rowContents,
+	});
+}
+
+function renderCurrentScreen() {
+	application.empty();
+	if (currentScreenMode === "list") {
+		application.add(buildListScreen());
+	} else {
+		application.add(buildDetailScreen()); // Task 10
+	}
+}
+
+new Button({
+	types: ["select", "up", "down", "back"],
+	onPush(down, type) {
+		if (!down) return; // only act on press, not release
+		if (currentScreenMode === "list") {
+			const items = buildItemList();
+			if (type === "up") selectedIndex = Math.max(0, selectedIndex - 1);
+			else if (type === "down")
+				selectedIndex = Math.min(items.length - 1, selectedIndex + 1);
+			else if (type === "select") currentScreenMode = "detail"; // Task 10
+			renderCurrentScreen();
+		} else {
+			// detail mode button handling added by Task 10
+		}
+	},
+});
+
+renderCurrentScreen();
