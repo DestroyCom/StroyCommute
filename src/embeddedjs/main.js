@@ -11,7 +11,6 @@ console.log("Hello, Watchface.");
 
 let stops = [];
 let alertLines = [];
-let apiKey = "";
 let scheduleDaysBitmask = 0;
 let scheduleStartMinutes = 0;
 let scheduleEndMinutes = 0;
@@ -22,15 +21,64 @@ let pendingConfigCount = 0;
 let pendingStops = [];
 let pendingLines = [];
 
-function onConfigReady() {
-	// overridden by the UI section (Task 9) once it exists
+// `pebble/message`'s Message class, when given `keys` as a plain array,
+// assigns each key a private numeric code of `10000 + arrayIndex` (see the
+// SDK's pebble-appmessage.js) — NOT the code pkjs and the underlying
+// AppMessage transport actually use, which is `10000 + index in
+// package.json's pebble.messageKeys array` (confirmed via the SDK's
+// process_message_keys.py waf task, and matches the codes
+// `pebble send-app-message` requires). A Message instance whose `keys`
+// array isn't an exact ordered prefix of package.json's array silently
+// decodes every field under the wrong name. Every Message instance in this
+// file must build its `keys` option from this canonical map instead of a
+// bare array, so codes always match package.json regardless of which
+// keys a given instance subscribes to or in what order.
+const ALL_MESSAGE_KEYS = [
+	"itemIndex",
+	"itemCount",
+	"itemType",
+	"scheduleDaysBitmask",
+	"scheduleStartMinutes",
+	"scheduleEndMinutes",
+	"timelineEnabled",
+	"stopRef",
+	"lineRef",
+	"lineName",
+	"stopName",
+	"state",
+	"destination",
+	"minutes",
+	"atStop",
+	"cancelled",
+];
+const MESSAGE_KEY_CODES = new Map(
+	ALL_MESSAGE_KEYS.map((key, index) => [key, 10000 + index])
+);
+
+function messageKeyMap(keys) {
+	return new Map(
+		keys.map((key) => {
+			const code = MESSAGE_KEY_CODES.get(key);
+			if (code === undefined) {
+				throw new Error(
+					"Unknown message key (missing from ALL_MESSAGE_KEYS): " + key
+				);
+			}
+			return [key, code];
+		})
+	);
 }
+
+// `let`, not `function`, because Task 8 reassigns this to chain in the
+// refresh-timer startup (biome flags reassigning a function declaration).
+let onConfigReady = () => {
+	// overridden by the UI section (Task 9) once it exists
+};
 
 const configMessageKeys = [
 	"itemIndex",
 	"itemCount",
 	"itemType",
-	"apiKey",
 	"scheduleDaysBitmask",
 	"scheduleStartMinutes",
 	"scheduleEndMinutes",
@@ -42,7 +90,7 @@ const configMessageKeys = [
 ];
 
 const configMessage = new Message({
-	keys: configMessageKeys,
+	keys: messageKeyMap(configMessageKeys),
 	onReadable() {
 		const msg = this.read();
 		const item = {};
@@ -55,7 +103,6 @@ const configMessage = new Message({
 
 function handleConfigItem(item) {
 	if (item.itemType === "configMeta") {
-		apiKey = item.apiKey;
 		scheduleDaysBitmask = item.scheduleDaysBitmask;
 		scheduleStartMinutes = item.scheduleStartMinutes;
 		scheduleEndMinutes = item.scheduleEndMinutes;
@@ -81,6 +128,119 @@ function handleConfigItem(item) {
 		onConfigReady();
 	}
 }
+
+// --- Departures — refresh timer ---
+// embeddedjs does NOT fetch or parse PRIM data (see
+// docs/pebble-idfm-prim/SKILL.md for why: a real PRIM URL + API key
+// combined in one embeddedjs fetch() reliably crashed real emery hardware
+// with fxAbort memory full, a fixed ~8KB chunk-memory ceiling on the
+// watch). This timer only sends a lightweight `refreshStop` request per
+// tracked stop to pkjs, which owns the fetch, and stores the
+// `departureUpdate` replies here for the UI to render. The timer stays in
+// embeddedjs since it's the only side that reliably knows the app is
+// foregrounded — Alloy apps aren't running otherwise.
+
+// Real implementation lands in Task 9; stubbed here so this task is
+// independently testable without depending on Task 9's completion.
+const renderCurrentScreen = () => {};
+
+const departures = new Map();
+
+const departureMessageKeys = [
+	"itemType",
+	"stopRef",
+	"lineRef",
+	"lineName",
+	"state",
+	"destination",
+	"minutes",
+	"atStop",
+	"cancelled",
+];
+
+// Same Message instance handles both directions of this protocol (receive
+// departureUpdate, send refreshStop) — embeddedjs has no
+// Pebble.sendAppMessage global, that's pkjs-only; `.write()` takes a Map,
+// not a plain object.
+const departureMessage = new Message({
+	keys: messageKeyMap(departureMessageKeys),
+	onReadable() {
+		const msg = this.read();
+		const item = {};
+		msg.forEach((value, key) => {
+			item[key] = value;
+		});
+		if (item.itemType !== "departureUpdate") return;
+
+		departures.set(item.stopRef, {
+			state: item.state,
+			line: item.lineName,
+			destination: item.destination,
+			minutes: item.minutes,
+			atStop: !!item.atStop,
+			cancelled: !!item.cancelled,
+		});
+		renderCurrentScreen();
+	},
+	// Sending departureMessage.write() back-to-back in a tight loop (one per
+	// tracked stop) throws "Error: not writable" and crashes the app
+	// (fxAbort) the moment a second write lands before the first is
+	// acknowledged — confirmed on-device, the watch-side mirror of Task 5's
+	// phone-side back-to-back-send-drop finding, but a hard crash here
+	// instead of a silent drop.
+	//
+	// onWritable is edge-triggered, not a poll-first capacity gate: it does
+	// NOT fire proactively when idle (confirmed on-device — a queue that
+	// only flushes from inside onWritable, gated on a count it sets, never
+	// sends anything at all if nothing has been attempted yet). The real
+	// contract is try-then-retry: call write() speculatively, catch the
+	// "not writable" throw if the single outbound slot is still busy, and
+	// let onWritable's firing (once the slot frees up) drive the retry.
+	onWritable() {
+		flushRefreshQueue();
+	},
+});
+
+let refreshTimer = null;
+let refreshQueue = [];
+
+function tryWriteRefreshStop(stop) {
+	const m = new Map();
+	m.set("itemType", "refreshStop");
+	m.set("stopRef", stop.stopRef);
+	m.set("lineRef", stop.lineRef);
+	m.set("lineName", stop.lineName);
+	try {
+		departureMessage.write(m);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function flushRefreshQueue() {
+	while (refreshQueue.length > 0) {
+		if (!tryWriteRefreshStop(refreshQueue[0])) break; // wait for onWritable to retry
+		refreshQueue.shift();
+	}
+}
+
+function requestRefresh() {
+	refreshQueue = stops.slice();
+	flushRefreshQueue();
+}
+
+function startRefreshTimer() {
+	if (refreshTimer) return;
+	refreshTimer = setInterval(requestRefresh, 45000);
+}
+
+const previousOnConfigReady = onConfigReady;
+onConfigReady = () => {
+	previousOnConfigReady();
+	requestRefresh();
+	startRefreshTimer();
+};
 
 const render = new Poco(screen);
 

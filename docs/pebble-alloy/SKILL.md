@@ -78,8 +78,46 @@ rectangular display).
 
 Always define keys in package.json's `messageKeys` BEFORE using them in
 code (otherwise silent build failure or a key gets converted to an
-unexpected string). See `docs/pebble-api-reference.md#appmessage` for the
-exact pattern used in this project.
+unexpected string). `docs/pebble-api-reference.md` referenced here in an
+earlier draft was never actually created in this repo — the two gotchas
+below are the concrete, on-device-confirmed reference until/unless that
+file exists.
+
+**embeddedjs's `pebble/message` `Message` class — key-code gotcha
+(confirmed on-device, Task 7/8).** Passing `keys` as a plain array (e.g.
+`new Message({ keys: ["itemType", "stopRef", ...] })`) does NOT use
+package.json's `pebble.messageKeys` numbering. Per the SDK's
+`pebble-appmessage.js`, an array gets remapped to `10000 + arrayIndex`
+locally — a DIFFERENT numbering than the `10000 + index-in-package.json`
+scheme pkjs and the wire protocol actually use (confirmed via the SDK's
+`process_message_keys.py` waf task). A `Message` instance whose local
+array isn't an exact ordered prefix of package.json's array silently
+decodes every field under the wrong key name — no error, no crash, items
+just don't reach the right handler (or reach the wrong one and get
+filtered out). **Always build `keys` as an explicit `Map<string, number>`**
+using package.json's real order (`10000 + globalIndex`), never a bare
+array, whenever a `Message` instance's key subset or order differs from
+package.json's — see `src/embeddedjs/main.js`'s `ALL_MESSAGE_KEYS`/
+`MESSAGE_KEY_CODES`/`messageKeyMap()` for the pattern. Two `Message`
+instances in the same file (e.g. one for config, one for departures) DO
+coexist and receive correctly once this is fixed — an earlier hypothesis
+that they couldn't coexist at all was wrong; the symptom (total silence
+on the older instance) was actually 100% explained by this key-code bug.
+
+**embeddedjs's `Message.write()` — back-to-back sends throw, don't
+silently drop (confirmed on-device, Task 8).** Calling `.write()` more
+than once in a tight synchronous loop (e.g. one per tracked stop) throws
+`Error: not writable` on the second call and crashes the app (`fxAbort`)
+if uncaught — the watch-side mirror of the known phone-side
+back-to-back-`sendAppMessage`-drops-messages issue (see Task 5), but a
+hard crash here instead of a silent drop. `onWritable` is
+**edge-triggered, not a poll-first capacity gate** — it does NOT fire
+proactively when idle, so a design that only calls `write()` from inside
+`onWritable` (gated on a count it reports) never sends anything at all.
+The correct pattern is try-then-retry: call `write()` speculatively,
+`catch` the throw if the single outbound slot is busy and queue the item,
+then let `onWritable` firing (once the slot frees up) drive the retry —
+see `src/embeddedjs/main.js`'s `tryWriteRefreshStop`/`flushRefreshQueue`.
 
 ## Debugging — common pitfalls
 
@@ -88,6 +126,23 @@ exact pattern used in this project.
 - Silent build errors → check missing `messageKeys` first.
 - pkjs has a different lifecycle than embeddedjs: it restarts on Bluetooth
   reconnection, no guaranteed persistent state between sessions.
+- **Individual AppMessage items can still vanish even with ack-chained
+  sends** (confirmed on-device, Task 7/8 testing, emulator). Task 5
+  already found that firing `Pebble.sendAppMessage()` back-to-back without
+  waiting for acks drops messages, and fixed it by chaining each send
+  through its success/fail callback (`sendItemsSequentially` in
+  `src/pkjs/index.js`). That chaining reduces but does not eliminate the
+  problem: in repeated Task 7/8 emulator runs, a single item out of a
+  4-item ack-chained config send (`configMeta` + 3×`configStop`) was
+  silently lost roughly 1 in 3 runs — pkjs's own ack fired successfully
+  (it believes the send succeeded), but the watch's corresponding
+  `Message`'s `onReadable` simply never fired for that item, no error
+  either side. Not yet root-caused or fixed (out of Task 7/8's scope,
+  which only covers the separate watch→phone `refreshStop` direction —
+  see the `Message.write()` entry above). Any future work needing
+  guaranteed multi-item delivery should design for this (e.g. an
+  itemCount/received-set reconciliation with a resend-missing-items
+  request) rather than assuming the ack chain alone is reliable.
 
 ## Before generating code
 

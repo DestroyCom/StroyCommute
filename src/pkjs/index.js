@@ -213,6 +213,9 @@ const moddableProxy = require("@moddable/pebbleproxy");
 Pebble.addEventListener("ready", moddableProxy.readyReceived);
 Pebble.addEventListener("appmessage", (e) => {
 	if (moddableProxy.appMessageReceived(e)) return;
+	if (e.payload.itemType === "refreshStop") {
+		handleRefreshStop(e.payload);
+	}
 });
 
 Pebble.addEventListener("showConfiguration", () => {
@@ -245,7 +248,6 @@ function sendConfigToWatch(config) {
 			itemIndex: 0,
 			itemCount: itemCount,
 			itemType: "configMeta",
-			apiKey: config.apiKey,
 			scheduleDaysBitmask: daysToBitmask(config.alertSchedule.days),
 			scheduleStartMinutes: timeStringToMinutes(config.alertSchedule.startTime),
 			scheduleEndMinutes: timeStringToMinutes(config.alertSchedule.endTime),
@@ -311,3 +313,101 @@ Pebble.addEventListener("ready", () => {
 	const stored = localStorage.getItem("stroycommuteConfig");
 	if (stored) sendConfigToWatch(JSON.parse(stored));
 });
+
+// --- Departures — PRIM stop-monitoring fetch/parse/convert ---
+//
+// Moved here from embeddedjs (originally speced watch-side, proxied by
+// @moddable/pebbleproxy): real-hardware testing found combining a real
+// ~150-char PRIM query string with a real 32-char API key in one embeddedjs
+// fetch() reliably crashed with fxAbort memory full — a fixed, non-growable
+// ~8KB XS chunk pool on the pebble/emery Alloy host, confirmed on real
+// hardware (see docs/pebble-idfm-prim/SKILL.md and
+// .superpowers/sdd/2026-08-17-stroycommute-scaffold/progress.md). pkjs has
+// native XMLHttpRequest (same API @moddable/pebbleproxy's own proxy.js uses
+// for its phone-side leg) and a much larger memory budget, so the fetch,
+// SIRI Lite parsing, and UTC→minutes conversion all live here now. The API
+// key is read from localStorage (already persisted by webviewclosed above)
+// rather than carried on the wire — the watch never sees it.
+
+function handleRefreshStop(request) {
+	const stored = localStorage.getItem("stroycommuteConfig");
+	const apiKey = stored ? JSON.parse(stored).apiKey : "";
+
+	const url =
+		"https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring" +
+		"?MonitoringRef=" +
+		encodeURIComponent(request.stopRef) +
+		"&LineRef=" +
+		encodeURIComponent(request.lineRef);
+
+	const xhr = new XMLHttpRequest();
+	xhr.open("GET", url, true);
+	xhr.setRequestHeader("apiKey", apiKey);
+	xhr.onload = () => {
+		if (xhr.status === 429) {
+			sendDepartureUpdate(request.stopRef, "quotaExceeded");
+			return;
+		}
+		if (xhr.status < 200 || xhr.status >= 300) {
+			sendDepartureUpdate(request.stopRef, "network");
+			return;
+		}
+
+		try {
+			const json = JSON.parse(xhr.responseText);
+			const visits =
+				json.Siri.ServiceDelivery.StopMonitoringDelivery[0].MonitoredStopVisit;
+
+			if (!visits || visits.length === 0) {
+				sendDepartureUpdate(request.stopRef, "noRealtimeData");
+				return;
+			}
+
+			const visit = visits[0];
+			const journey = visit.MonitoredVehicleJourney;
+			const call = journey.MonitoredCall;
+
+			const cancelled = call.DepartureStatus === "cancelled";
+			const atStop = call.VehicleAtStop === true;
+			let minutes;
+			if (atStop) {
+				minutes = -1;
+			} else {
+				// pkjs has full Date support — this is why the conversion
+				// lives here, not in embeddedjs (see idfm-api-reference.md's
+				// UTC gotcha).
+				const expected = new Date(call.ExpectedArrivalTime);
+				minutes = Math.round((expected.getTime() - Date.now()) / 60000);
+			}
+
+			sendDepartureUpdate(request.stopRef, "ok", {
+				lineName: request.lineName,
+				destination: call.DestinationDisplay
+					? call.DestinationDisplay[0].value
+					: "",
+				minutes: minutes,
+				atStop: atStop,
+				cancelled: cancelled,
+			});
+		} catch (error) {
+			console.log("departureUpdate parse error: " + error);
+			sendDepartureUpdate(request.stopRef, "network");
+		}
+	};
+	xhr.onerror = () => {
+		sendDepartureUpdate(request.stopRef, "network");
+	};
+	xhr.send();
+}
+
+function sendDepartureUpdate(stopRef, state, extra) {
+	const payload = Object.assign(
+		{
+			itemType: "departureUpdate",
+			stopRef: stopRef,
+			state: state,
+		},
+		extra || {}
+	);
+	Pebble.sendAppMessage(payload);
+}

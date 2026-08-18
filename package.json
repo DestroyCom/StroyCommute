@@ -31,7 +31,6 @@
 			"itemIndex",
 			"itemCount",
 			"itemType",
-			"apiKey",
 			"scheduleDaysBitmask",
 			"scheduleStartMinutes",
 			"scheduleEndMinutes",
@@ -39,7 +38,12 @@
 			"stopRef",
 			"lineRef",
 			"lineName",
-			"stopName"
+			"stopName",
+			"state",
+			"destination",
+			"minutes",
+			"atStop",
+			"cancelled"
 		],
 		"resources": {
 			"media": []
