@@ -347,7 +347,50 @@ function sendItemsSequentially(items, index, retriesLeft) {
 	);
 }
 
-Pebble.addEventListener("ready", sendStoredConfigToWatch);
+// TEMPORARY DEV DEFAULT (2026-08-18) — no way to reach the config page on
+// real hardware yet: capabilities: ["configurable"] is declared correctly
+// per the official docs (developer.repebble.com), confirmed present in the
+// built appinfo.json, and the app was fully deleted + reinstalled on the
+// phone — the settings gear still doesn't appear. Root cause not yet
+// found (docs explicitly don't cover CloudPebble-sideload behavior; see
+// progress.md's real-hardware finding entry). Seeds one real test stop so
+// list/detail screen navigation (Tasks 9/10) can be exercised without the
+// config flow. Deliberately no apiKey here — it must never be hardcoded;
+// PRIM fetches will come back as state "network" until a real key reaches
+// the phone through the config page (or another legitimate channel) is
+// found. Remove this function and the wrapper below once that's resolved.
+function seedDevDefaultConfigIfMissing() {
+	if (localStorage.getItem("stroycommuteConfig")) return;
+	console.log(
+		"DEV DEFAULT: no stored config found, seeding one test stop (no apiKey)"
+	);
+	localStorage.setItem(
+		"stroycommuteConfig",
+		JSON.stringify({
+			apiKey: "",
+			trackedStops: [
+				{
+					stopRef: "STIF:StopPoint:Q:463158:",
+					lineRef: "STIF:Line::C01374:",
+					lineName: "4",
+					stopName: "Châtelet",
+				},
+			],
+			trackedLines: [],
+			alertSchedule: {
+				days: [1, 2, 3, 4, 5],
+				startTime: "07:00",
+				endTime: "20:00",
+			},
+			timelineEnabled: false,
+		})
+	);
+}
+
+Pebble.addEventListener("ready", () => {
+	seedDevDefaultConfigIfMissing();
+	sendStoredConfigToWatch();
+});
 
 // --- Departures — PRIM stop-monitoring fetch/parse/convert ---
 //
