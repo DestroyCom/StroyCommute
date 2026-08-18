@@ -1,4 +1,3 @@
-import Button from "pebble/button";
 import Message from "pebble/message";
 
 console.log("Hello, Watchface.");
@@ -374,13 +373,18 @@ onConfigReady = () => {
 // a full Piu `Application` owns the display's render list once created (see
 // `PiuView`'s constructor setting `screen.context = this`), and a second,
 // unrelated direct-draw loop on the same `screen` would fight it for the
-// same framebuffer. `Skin`/`Style`/`Container`/`Label`/`Application` need no
-// import: the SDK's pebble host (`build/devices/pebble/host/main.js`)
-// injects them as globals into every app module's scope via `import {} from
-// "piu/MC"` — confirmed by reading that file directly, not guessed. `Button`
-// is the one exception, not in that globals list, hence the explicit
-// `import Button from "pebble/button"` above (also confirmed against the
-// SDK's own `setup/piu.js`, which imports it the same way).
+// same framebuffer. `Skin`/`Style`/`Container`/`Label`/`Application`/
+// `Behavior` need no import: the SDK's pebble host (`build/devices/pebble/
+// host/main.js`) injects them as globals into every app module's scope via
+// `import {} from "piu/MC"` — confirmed by reading that file directly, not
+// guessed. Hardware buttons are handled via `Behavior`'s `onPressSelect`/
+// `onPressUp`/`onPressDown`/`onPressBack` methods on the focused container
+// (see `MainBehavior` below), not the separate `pebble/button` `Button`
+// class this file used originally — that class does receive presses, but
+// runs alongside Piu's own native back-button handling rather than
+// replacing it, so it can't suppress the OS's default exit-on-back
+// behavior. Confirmed against a real, working multi-screen Piu app
+// (Moddable-OpenSource/pebble-examples, `piu/apps/words`), not guessed.
 
 const whiteSkin = new Skin({ fill: "white" });
 const highlightSkin = new Skin({ fill: "#4444FF" });
@@ -426,13 +430,67 @@ function rowLabel(item) {
 let selectedIndex = 0;
 let currentScreenMode = "list"; // "list" | "detail", read/written by Task 10 too
 
+// Hardware buttons in Piu route through a focused container's Behavior
+// (onPressSelect/onPressUp/onPressDown/onPressBack), NOT through a
+// standalone pebble/button Message-style Button instance -- confirmed by
+// reading a real, working multi-screen Piu app
+// (Moddable-OpenSource/pebble-examples, piu/apps/words:
+// modules/piuView.js's ViewBehavior). A separate Button({types:["back",...]})
+// (the original Task 9/10 approach) DOES still receive the press (verified
+// on real hardware via temporary logging), but it runs alongside Piu's own
+// native back-handling rather than replacing it, so the OS still exits the
+// app on a single back press regardless of what the Button's callback does
+// -- that's the root cause of "back exits the app instead of returning to
+// the list", not a bug in the press-handling logic itself.
+// onPressBack only returning true (handled, don't exit) from detail mode
+// mirrors the reference's own convention: falling through (no truthy
+// return) when there's nothing to go back to is what lets the OS's normal
+// exit-on-back behavior apply at the list screen (the app's root) --
+// exactly the behavior we want there.
+class MainBehavior extends Behavior {
+	onPressSelect() {
+		if (currentScreenMode !== "list") return;
+		const items = buildItemList();
+		if (items.length === 0) return;
+		currentScreenMode = "detail";
+		renderCurrentScreen();
+		return true;
+	}
+	onPressUp() {
+		this.step(-1);
+		return true;
+	}
+	onPressDown() {
+		this.step(1);
+		return true;
+	}
+	onPressBack() {
+		if (currentScreenMode !== "detail") return; // let the OS exit as usual
+		currentScreenMode = "list";
+		renderCurrentScreen();
+		return true;
+	}
+	step(direction) {
+		const items = buildItemList();
+		if (items.length === 0) return;
+		const maxIndex = Math.max(0, items.length - 1);
+		selectedIndex = Math.max(0, Math.min(maxIndex, selectedIndex + direction));
+		renderCurrentScreen();
+	}
+}
+
 const application = new Application(null, {
 	left: 0,
 	right: 0,
 	top: 0,
 	bottom: 0,
 	skin: whiteSkin,
+	Behavior: MainBehavior,
 });
+// Piu only routes hardware button presses to a focused container's
+// Behavior -- without this, MainBehavior's onPress* methods above would
+// simply never fire.
+application.focus();
 
 function buildListScreen() {
 	const items = buildItemList();
@@ -629,41 +687,5 @@ function renderCurrentScreen() {
 		application.add(buildDetailScreen()); // Task 10
 	}
 }
-
-new Button({
-	types: ["select", "up", "down", "back"],
-	onPush(down, type) {
-		if (!down) return; // only act on press, not release
-		if (currentScreenMode === "list") {
-			const items = buildItemList();
-			if (items.length === 0) return; // nothing to select/scroll yet
-			if (type === "up") selectedIndex = Math.max(0, selectedIndex - 1);
-			else if (type === "down")
-				selectedIndex = Math.min(items.length - 1, selectedIndex + 1);
-			else if (type === "select") currentScreenMode = "detail"; // Task 10
-			renderCurrentScreen();
-		} else {
-			const items = buildItemList();
-			// Clamp against the *current* list length, not just decrement/
-			// increment the previous selectedIndex: if the tracked-stops
-			// config changed while a detail screen was open (list shrank),
-			// selectedIndex can be stale and out of range for `items` here.
-			// Math.min(maxIndex, ...) pulls a too-large stale index straight
-			// back into range on the very first up/down press (rather than
-			// requiring several presses to walk it back one step at a time),
-			// and the outer Math.max(0, ...) also covers items.length === 0
-			// (maxIndex clamps to 0, matching buildDetailScreen's own
-			// items[0] === undefined guard, which then renders an empty
-			// screen instead of crashing).
-			const maxIndex = Math.max(0, items.length - 1);
-			if (type === "up")
-				selectedIndex = Math.max(0, Math.min(maxIndex, selectedIndex - 1));
-			else if (type === "down")
-				selectedIndex = Math.max(0, Math.min(maxIndex, selectedIndex + 1));
-			else if (type === "back") currentScreenMode = "list";
-			renderCurrentScreen();
-		}
-	},
-});
 
 renderCurrentScreen();
