@@ -510,6 +510,7 @@ new Button({
 		if (!down) return; // only act on press, not release
 		if (currentScreenMode === "list") {
 			const items = buildItemList();
+			if (items.length === 0) return; // nothing to select/scroll yet
 			if (type === "up") selectedIndex = Math.max(0, selectedIndex - 1);
 			else if (type === "down")
 				selectedIndex = Math.min(items.length - 1, selectedIndex + 1);
