@@ -277,6 +277,31 @@
     var json = JSON.stringify(config);
     document.location = "pebblejs://close#" + encodeURIComponent(json);
   }
+
+  // Pre-fill from whatever's already saved, if anything -- pkjs injects
+  // this as window.__initialConfig right before this script tag (see
+  // buildConfigDataUri() in src/pkjs/index.js). Without this the page
+  // always looks empty on reopen even though a previous save worked fine.
+  (() => {
+    var initial = window.__initialConfig;
+    if (!initial) return;
+    document.getElementById("apiKey").value = initial.apiKey || "";
+    (initial.trackedStops || []).forEach((s) => {
+      addStopRow({ stopRef: s.stopRef, stopName: s.stopName, lineRef: s.lineRef, lineName: s.lineName });
+    });
+    (initial.trackedLines || []).forEach((l) => {
+      addLineRow({ lineRef: l.lineRef, lineName: l.lineName });
+    });
+    var days = (initial.alertSchedule && initial.alertSchedule.days) || [];
+    document.querySelectorAll(".dayBox").forEach((box) => {
+      box.checked = days.indexOf(parseInt(box.value, 10)) !== -1;
+    });
+    if (initial.alertSchedule) {
+      document.getElementById("scheduleStart").value = initial.alertSchedule.startTime || "07:00";
+      document.getElementById("scheduleEnd").value = initial.alertSchedule.endTime || "19:30";
+    }
+    document.getElementById("timelineEnabled").checked = !!initial.timelineEnabled;
+  })();
 </script>
 </body>
 </html>

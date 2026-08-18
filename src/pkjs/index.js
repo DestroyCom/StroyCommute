@@ -287,6 +287,31 @@ const CONFIG_HTML = `<!DOCTYPE html>
     var json = JSON.stringify(config);
     document.location = "pebblejs://close#" + encodeURIComponent(json);
   }
+
+  // Pre-fill from whatever's already saved, if anything -- pkjs injects
+  // this as window.__initialConfig right before this script tag (see
+  // buildConfigDataUri() in src/pkjs/index.js). Without this the page
+  // always looks empty on reopen even though a previous save worked fine.
+  (() => {
+    var initial = window.__initialConfig;
+    if (!initial) return;
+    document.getElementById("apiKey").value = initial.apiKey || "";
+    (initial.trackedStops || []).forEach((s) => {
+      addStopRow({ stopRef: s.stopRef, stopName: s.stopName, lineRef: s.lineRef, lineName: s.lineName });
+    });
+    (initial.trackedLines || []).forEach((l) => {
+      addLineRow({ lineRef: l.lineRef, lineName: l.lineName });
+    });
+    var days = (initial.alertSchedule && initial.alertSchedule.days) || [];
+    document.querySelectorAll(".dayBox").forEach((box) => {
+      box.checked = days.indexOf(parseInt(box.value, 10)) !== -1;
+    });
+    if (initial.alertSchedule) {
+      document.getElementById("scheduleStart").value = initial.alertSchedule.startTime || "07:00";
+      document.getElementById("scheduleEnd").value = initial.alertSchedule.endTime || "19:30";
+    }
+    document.getElementById("timelineEnabled").checked = !!initial.timelineEnabled;
+  })();
 </script>
 </body>
 </html>
@@ -336,7 +361,27 @@ function utf8ToBase64(str) {
 	return output;
 }
 
-const CONFIG_DATA_URI = `data:text/html;charset=utf-8;base64,${utf8ToBase64(CONFIG_HTML)}`;
+// Built fresh every time the config page opens (not a precomputed constant)
+// so the page can be pre-filled with whatever's already saved -- otherwise
+// reopening settings always looks empty even though the underlying save
+// worked, which is confusing (a config page is not a form with server-side
+// state; it has to be told what's already there). Injects a small inline
+// script defining window.__initialConfig right after CONFIG_HTML's single
+// <script> tag; config/index.html's own script reads that at the bottom to
+// pre-populate the stop/line rows, apiKey, schedule, and timeline checkbox.
+// `<` is escaped to < so a stop/line name or apiKey containing
+// "</script" (astronomically unlikely from real IDFM data, but free to
+// guard against) can't break out of the injected script tag.
+function buildConfigDataUri() {
+	const stored = localStorage.getItem("stroycommuteConfig");
+	const initialConfig = stored ? JSON.parse(stored) : null;
+	const injected = JSON.stringify(initialConfig).replace(/</g, "\\u003c");
+	const html = CONFIG_HTML.replace(
+		"<script>",
+		`<script>window.__initialConfig = ${injected};`
+	);
+	return `data:text/html;charset=utf-8;base64,${utf8ToBase64(html)}`;
+}
 
 const moddableProxy = require("@moddable/pebbleproxy");
 
@@ -364,7 +409,7 @@ Pebble.addEventListener("appmessage", (e) => {
 });
 
 Pebble.addEventListener("showConfiguration", () => {
-	Pebble.openURL(CONFIG_DATA_URI);
+	Pebble.openURL(buildConfigDataUri());
 });
 
 Pebble.addEventListener("webviewclosed", (e) => {
