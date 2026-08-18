@@ -210,6 +210,14 @@ const CONFIG_DATA_URI = `data:text/html;charset=utf-8;base64,${utf8ToBase64(CONF
 
 const moddableProxy = require("@moddable/pebbleproxy");
 
+// Shared by the initial "ready" send and the Task 8b configResendRequest
+// handler below -- both just need "resend whatever's currently persisted,
+// if anything".
+function sendStoredConfigToWatch() {
+	const stored = localStorage.getItem("stroycommuteConfig");
+	if (stored) sendConfigToWatch(JSON.parse(stored));
+}
+
 Pebble.addEventListener("ready", moddableProxy.readyReceived);
 Pebble.addEventListener("appmessage", (e) => {
 	if (moddableProxy.appMessageReceived(e)) return;
@@ -221,8 +229,7 @@ Pebble.addEventListener("appmessage", (e) => {
 		// sendConfigToWatch() as-is -- handleConfigItem already resets
 		// pendingStops/pendingLines on a fresh configMeta, so a full resend
 		// mid-session is safe.
-		const stored = localStorage.getItem("stroycommuteConfig");
-		if (stored) sendConfigToWatch(JSON.parse(stored));
+		sendStoredConfigToWatch();
 	}
 });
 
@@ -340,10 +347,7 @@ function sendItemsSequentially(items, index, retriesLeft) {
 	);
 }
 
-Pebble.addEventListener("ready", () => {
-	const stored = localStorage.getItem("stroycommuteConfig");
-	if (stored) sendConfigToWatch(JSON.parse(stored));
-});
+Pebble.addEventListener("ready", sendStoredConfigToWatch);
 
 // --- Departures — PRIM stop-monitoring fetch/parse/convert ---
 //

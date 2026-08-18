@@ -20,6 +20,14 @@ let configLoaded = false;
 let pendingConfigCount = 0;
 let pendingStops = [];
 let pendingLines = [];
+// Set of item indices actually received for the config batch currently
+// being assembled, reset alongside pendingStops/pendingLines whenever a
+// fresh configMeta arrives. A Set (not a plain counter) so a duplicate
+// delivery of the same index -- e.g. the watch's onReadable firing twice
+// for one item, per the race described below -- can't inflate the count
+// past pendingConfigCount without every distinct index actually having
+// arrived.
+let receivedConfigIndices = new Set();
 
 // `pebble/message`'s Message class, when given `keys` as a plain array,
 // assigns each key a private numeric code of `10000 + arrayIndex` (see the
@@ -175,7 +183,7 @@ function onConfigResendTimeout() {
 		// covers it, so a busy slot just delays this attempt rather than
 		// silently dropping it.
 		console.log(
-			"configResendRequest: write failed (outbound slot busy): " + error
+			`configResendRequest: write failed (outbound slot busy): ${error}`
 		);
 	}
 	scheduleConfigResendTimeout();
@@ -192,6 +200,7 @@ function handleConfigItem(item) {
 		pendingConfigCount = item.itemCount;
 		pendingStops = [];
 		pendingLines = [];
+		receivedConfigIndices = new Set();
 	} else if (item.itemType === "configStop") {
 		pendingStops.push({
 			stopRef: item.stopRef,
@@ -203,7 +212,23 @@ function handleConfigItem(item) {
 		pendingLines.push({ lineRef: item.lineRef, lineName: item.lineName });
 	}
 
-	if (item.itemIndex === pendingConfigCount - 1) {
+	receivedConfigIndices.add(item.itemIndex);
+
+	// Completion requires every expected index to have actually arrived, not
+	// just the last one by index (see the Important finding this fixes: a
+	// dropped middle item, e.g. index 1 of 3, used to slip past a
+	// `itemIndex === pendingConfigCount - 1` check satisfied by index 2
+	// arriving normally -- silently completing with stops/alertLines missing
+	// whatever the dropped item contributed, and clearing the resend safety
+	// net that was supposed to catch exactly this). Set.size against
+	// pendingConfigCount is robust to duplicate/out-of-order delivery, unlike
+	// a plain received-count. `pendingConfigCount > 0` guards against
+	// completing before any configMeta has ever been seen this session/batch
+	// (pendingConfigCount defaults to 0).
+	if (
+		pendingConfigCount > 0 &&
+		receivedConfigIndices.size === pendingConfigCount
+	) {
 		stops = pendingStops;
 		alertLines = pendingLines;
 		configLoaded = true;
