@@ -75,9 +75,9 @@ const CONFIG_HTML = `<!DOCTYPE html>
     var div = document.createElement("div");
     div.className = "row stopRow";
     div.innerHTML =
-      '<input type="text" class="stopRef" placeholder="STIF:StopPoint:Q:..." value="' + (values.stopRef || "") + '">' +
+      '<input type="text" class="stopRef" placeholder="STIF:StopPoint:Q:..." autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" value="' + (values.stopRef || "") + '">' +
       '<input type="text" class="stopName" placeholder="Nom arrêt" value="' + (values.stopName || "") + '">' +
-      '<input type="text" class="lineRefStop" placeholder="STIF:Line::..." value="' + (values.lineRef || "") + '">' +
+      '<input type="text" class="lineRefStop" placeholder="STIF:Line::..." autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" value="' + (values.lineRef || "") + '">' +
       '<input type="text" class="lineNameStop" placeholder="Ligne" value="' + (values.lineName || "") + '">' +
       '<button type="button" class="remove" onclick="this.parentElement.remove(); updateCount();">x</button>';
     document.getElementById("stopsList").appendChild(div);
@@ -89,7 +89,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
     var div = document.createElement("div");
     div.className = "row lineRow";
     div.innerHTML =
-      '<input type="text" class="lineRefAlert" placeholder="STIF:Line::..." value="' + (values.lineRef || "") + '">' +
+      '<input type="text" class="lineRefAlert" placeholder="STIF:Line::..." autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" value="' + (values.lineRef || "") + '">' +
       '<input type="text" class="lineNameAlert" placeholder="Ligne" value="' + (values.lineName || "") + '">' +
       '<button type="button" class="remove" onclick="this.parentElement.remove(); updateCount();">x</button>';
     document.getElementById("linesList").appendChild(div);
@@ -101,16 +101,35 @@ const CONFIG_HTML = `<!DOCTYPE html>
     document.getElementById("itemCount").textContent = count + " / " + MAX_ITEMS + " éléments suivis";
   }
 
+  // Mobile keyboards (iOS smart punctuation, Android predictive text) can
+  // silently insert a space after ":" while typing an ID like
+  // "STIF:StopPoint:Q:463158:", corrupting it in a way that's easy to miss
+  // visually. IDs never legitimately contain whitespace, so strip all of it
+  // regardless of the input's autocorrect/autocapitalize attributes above
+  // (belt and suspenders -- those attributes reduce but don't guarantee
+  // preventing this on every keyboard).
+  function stripId(value) {
+    return value.replace(/\s+/g, "");
+  }
+
   function collectStops() {
     var rows = document.querySelectorAll(".stopRow");
     var result = [];
     rows.forEach(function (row, i) {
+      var stopRef = stripId(row.querySelector(".stopRef").value);
+      var lineRef = stripId(row.querySelector(".lineRefStop").value);
+      var stopName = row.querySelector(".stopName").value;
+      var lineName = row.querySelector(".lineNameStop").value;
+      // Skip a row nobody filled in (e.g. the default empty row added by
+      // addStopRow() at page load, left untouched) rather than submitting
+      // it as a real tracked stop.
+      if (!stopRef && !lineRef && !stopName && !lineName) return;
       result.push({
         id: "stop" + i,
-        stopRef: row.querySelector(".stopRef").value,
-        stopName: row.querySelector(".stopName").value,
-        lineRef: row.querySelector(".lineRefStop").value,
-        lineName: row.querySelector(".lineNameStop").value
+        stopRef: stopRef,
+        stopName: stopName,
+        lineRef: lineRef,
+        lineName: lineName
       });
     });
     return result;
@@ -120,9 +139,12 @@ const CONFIG_HTML = `<!DOCTYPE html>
     var rows = document.querySelectorAll(".lineRow");
     var result = [];
     rows.forEach(function (row) {
+      var lineRef = stripId(row.querySelector(".lineRefAlert").value);
+      var lineName = row.querySelector(".lineNameAlert").value;
+      if (!lineRef && !lineName) return;
       result.push({
-        lineRef: row.querySelector(".lineRefAlert").value,
-        lineName: row.querySelector(".lineNameAlert").value
+        lineRef: lineRef,
+        lineName: lineName
       });
     });
     return result;
@@ -347,50 +369,7 @@ function sendItemsSequentially(items, index, retriesLeft) {
 	);
 }
 
-// TEMPORARY DEV DEFAULT (2026-08-18) — no way to reach the config page on
-// real hardware yet: capabilities: ["configurable"] is declared correctly
-// per the official docs (developer.repebble.com), confirmed present in the
-// built appinfo.json, and the app was fully deleted + reinstalled on the
-// phone — the settings gear still doesn't appear. Root cause not yet
-// found (docs explicitly don't cover CloudPebble-sideload behavior; see
-// progress.md's real-hardware finding entry). Seeds one real test stop so
-// list/detail screen navigation (Tasks 9/10) can be exercised without the
-// config flow. Deliberately no apiKey here — it must never be hardcoded;
-// PRIM fetches will come back as state "network" until a real key reaches
-// the phone through the config page (or another legitimate channel) is
-// found. Remove this function and the wrapper below once that's resolved.
-function seedDevDefaultConfigIfMissing() {
-	if (localStorage.getItem("stroycommuteConfig")) return;
-	console.log(
-		"DEV DEFAULT: no stored config found, seeding one test stop (no apiKey)"
-	);
-	localStorage.setItem(
-		"stroycommuteConfig",
-		JSON.stringify({
-			apiKey: "",
-			trackedStops: [
-				{
-					stopRef: "STIF:StopPoint:Q:463158:",
-					lineRef: "STIF:Line::C01374:",
-					lineName: "4",
-					stopName: "Châtelet",
-				},
-			],
-			trackedLines: [],
-			alertSchedule: {
-				days: [1, 2, 3, 4, 5],
-				startTime: "07:00",
-				endTime: "20:00",
-			},
-			timelineEnabled: false,
-		})
-	);
-}
-
-Pebble.addEventListener("ready", () => {
-	seedDevDefaultConfigIfMissing();
-	sendStoredConfigToWatch();
-});
+Pebble.addEventListener("ready", sendStoredConfigToWatch);
 
 // --- Departures — PRIM stop-monitoring fetch/parse/convert ---
 //

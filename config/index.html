@@ -65,9 +65,9 @@
     var div = document.createElement("div");
     div.className = "row stopRow";
     div.innerHTML =
-      '<input type="text" class="stopRef" placeholder="STIF:StopPoint:Q:..." value="' + (values.stopRef || "") + '">' +
+      '<input type="text" class="stopRef" placeholder="STIF:StopPoint:Q:..." autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" value="' + (values.stopRef || "") + '">' +
       '<input type="text" class="stopName" placeholder="Nom arrêt" value="' + (values.stopName || "") + '">' +
-      '<input type="text" class="lineRefStop" placeholder="STIF:Line::..." value="' + (values.lineRef || "") + '">' +
+      '<input type="text" class="lineRefStop" placeholder="STIF:Line::..." autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" value="' + (values.lineRef || "") + '">' +
       '<input type="text" class="lineNameStop" placeholder="Ligne" value="' + (values.lineName || "") + '">' +
       '<button type="button" class="remove" onclick="this.parentElement.remove(); updateCount();">x</button>';
     document.getElementById("stopsList").appendChild(div);
@@ -79,7 +79,7 @@
     var div = document.createElement("div");
     div.className = "row lineRow";
     div.innerHTML =
-      '<input type="text" class="lineRefAlert" placeholder="STIF:Line::..." value="' + (values.lineRef || "") + '">' +
+      '<input type="text" class="lineRefAlert" placeholder="STIF:Line::..." autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" value="' + (values.lineRef || "") + '">' +
       '<input type="text" class="lineNameAlert" placeholder="Ligne" value="' + (values.lineName || "") + '">' +
       '<button type="button" class="remove" onclick="this.parentElement.remove(); updateCount();">x</button>';
     document.getElementById("linesList").appendChild(div);
@@ -91,16 +91,35 @@
     document.getElementById("itemCount").textContent = count + " / " + MAX_ITEMS + " éléments suivis";
   }
 
+  // Mobile keyboards (iOS smart punctuation, Android predictive text) can
+  // silently insert a space after ":" while typing an ID like
+  // "STIF:StopPoint:Q:463158:", corrupting it in a way that's easy to miss
+  // visually. IDs never legitimately contain whitespace, so strip all of it
+  // regardless of the input's autocorrect/autocapitalize attributes above
+  // (belt and suspenders -- those attributes reduce but don't guarantee
+  // preventing this on every keyboard).
+  function stripId(value) {
+    return value.replace(/\s+/g, "");
+  }
+
   function collectStops() {
     var rows = document.querySelectorAll(".stopRow");
     var result = [];
     rows.forEach(function (row, i) {
+      var stopRef = stripId(row.querySelector(".stopRef").value);
+      var lineRef = stripId(row.querySelector(".lineRefStop").value);
+      var stopName = row.querySelector(".stopName").value;
+      var lineName = row.querySelector(".lineNameStop").value;
+      // Skip a row nobody filled in (e.g. the default empty row added by
+      // addStopRow() at page load, left untouched) rather than submitting
+      // it as a real tracked stop.
+      if (!stopRef && !lineRef && !stopName && !lineName) return;
       result.push({
         id: "stop" + i,
-        stopRef: row.querySelector(".stopRef").value,
-        stopName: row.querySelector(".stopName").value,
-        lineRef: row.querySelector(".lineRefStop").value,
-        lineName: row.querySelector(".lineNameStop").value
+        stopRef: stopRef,
+        stopName: stopName,
+        lineRef: lineRef,
+        lineName: lineName
       });
     });
     return result;
@@ -110,9 +129,12 @@
     var rows = document.querySelectorAll(".lineRow");
     var result = [];
     rows.forEach(function (row) {
+      var lineRef = stripId(row.querySelector(".lineRefAlert").value);
+      var lineName = row.querySelector(".lineNameAlert").value;
+      if (!lineRef && !lineName) return;
       result.push({
-        lineRef: row.querySelector(".lineRefAlert").value,
-        lineName: row.querySelector(".lineNameAlert").value
+        lineRef: lineRef,
+        lineName: lineName
       });
     });
     return result;
