@@ -495,6 +495,132 @@ function buildListScreen() {
 	});
 }
 
+const titleStyle = new Style({ font: "bold 24px Gothic", color: "black" });
+const bodyStyle = new Style({ font: "18px Gothic", color: "black" });
+const errorStyle = new Style({ font: "18px Gothic", color: "#AA0000" });
+
+function buildDetailScreen() {
+	const items = buildItemList();
+	const item = items[selectedIndex];
+	if (!item) {
+		return new Container(null, {
+			left: 0,
+			right: 0,
+			top: 0,
+			bottom: 0,
+			skin: whiteSkin,
+			contents: [],
+		});
+	}
+
+	const lines = [];
+	if (item.type === "stop") {
+		const dep = departures.get(item.stopRef);
+		lines.push(
+			new Label(null, {
+				top: 10,
+				left: 8,
+				right: 8,
+				style: titleStyle,
+				string: `${item.lineName} — ${item.stopName}`,
+			})
+		);
+		if (!dep) {
+			lines.push(
+				new Label(null, {
+					top: 60,
+					left: 8,
+					right: 8,
+					style: bodyStyle,
+					string: "Chargement...",
+				})
+			);
+		} else if (dep.state === "network") {
+			lines.push(
+				new Label(null, {
+					top: 60,
+					left: 8,
+					right: 8,
+					style: errorStyle,
+					string: "Erreur réseau",
+				})
+			);
+		} else if (dep.state === "noRealtimeData") {
+			lines.push(
+				new Label(null, {
+					top: 60,
+					left: 8,
+					right: 8,
+					style: bodyStyle,
+					string: "Pas de temps réel pour cet arrêt",
+				})
+			);
+		} else if (dep.state === "quotaExceeded") {
+			lines.push(
+				new Label(null, {
+					top: 60,
+					left: 8,
+					right: 8,
+					style: errorStyle,
+					string: "Quota API dépassé",
+				})
+			);
+		} else {
+			const status = dep.cancelled
+				? "Supprimé"
+				: dep.atStop
+					? "À quai"
+					: `${dep.minutes} min`;
+			lines.push(
+				new Label(null, {
+					top: 60,
+					left: 8,
+					right: 8,
+					style: bodyStyle,
+					string: dep.destination,
+				})
+			);
+			lines.push(
+				new Label(null, {
+					top: 100,
+					left: 8,
+					right: 8,
+					style: titleStyle,
+					string: status,
+				})
+			);
+		}
+	} else {
+		lines.push(
+			new Label(null, {
+				top: 10,
+				left: 8,
+				right: 8,
+				style: titleStyle,
+				string: item.lineName,
+			})
+		);
+		lines.push(
+			new Label(null, {
+				top: 60,
+				left: 8,
+				right: 8,
+				style: bodyStyle,
+				string: "Alertes trafic bientôt disponibles",
+			})
+		);
+	}
+
+	return new Container(null, {
+		left: 0,
+		right: 0,
+		top: 0,
+		bottom: 0,
+		skin: whiteSkin,
+		contents: lines,
+	});
+}
+
 function renderCurrentScreen() {
 	application.empty();
 	if (currentScreenMode === "list") {
@@ -517,7 +643,25 @@ new Button({
 			else if (type === "select") currentScreenMode = "detail"; // Task 10
 			renderCurrentScreen();
 		} else {
-			// detail mode button handling added by Task 10
+			const items = buildItemList();
+			// Clamp against the *current* list length, not just decrement/
+			// increment the previous selectedIndex: if the tracked-stops
+			// config changed while a detail screen was open (list shrank),
+			// selectedIndex can be stale and out of range for `items` here.
+			// Math.min(maxIndex, ...) pulls a too-large stale index straight
+			// back into range on the very first up/down press (rather than
+			// requiring several presses to walk it back one step at a time),
+			// and the outer Math.max(0, ...) also covers items.length === 0
+			// (maxIndex clamps to 0, matching buildDetailScreen's own
+			// items[0] === undefined guard, which then renders an empty
+			// screen instead of crashing).
+			const maxIndex = Math.max(0, items.length - 1);
+			if (type === "up")
+				selectedIndex = Math.max(0, Math.min(maxIndex, selectedIndex - 1));
+			else if (type === "down")
+				selectedIndex = Math.max(0, Math.min(maxIndex, selectedIndex + 1));
+			else if (type === "back") currentScreenMode = "list";
+			renderCurrentScreen();
 		}
 	},
 });
