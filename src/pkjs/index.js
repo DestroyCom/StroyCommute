@@ -215,6 +215,14 @@ Pebble.addEventListener("appmessage", (e) => {
 	if (moddableProxy.appMessageReceived(e)) return;
 	if (e.payload.itemType === "refreshStop") {
 		handleRefreshStop(e.payload);
+	} else if (e.payload.itemType === "configResendRequest") {
+		// Task 8b reconciliation: the watch didn't see a complete config
+		// within its timeout and is asking for a fresh full resend. Reuse
+		// sendConfigToWatch() as-is -- handleConfigItem already resets
+		// pendingStops/pendingLines on a fresh configMeta, so a full resend
+		// mid-session is safe.
+		const stored = localStorage.getItem("stroycommuteConfig");
+		if (stored) sendConfigToWatch(JSON.parse(stored));
 	}
 });
 
@@ -286,12 +294,35 @@ function sendConfigToWatch(config) {
 
 const MAX_SEND_RETRIES = 3;
 
+// Task 8b: root-caused via instrumented logging (10-run emulator repro, see
+// task-8b-report.md) that pkjs's ack for item N can fire and trigger item
+// N+1's sendAppMessage within single-digit milliseconds -- faster than the
+// watch's embeddedjs side can drain one AppMessage inbox item via its own
+// onReadable/read() cycle before the next write lands. Confirmed cases: the
+// watch's onReadable fired twice for the same itemIndex (received item N+1
+// but never N) and cases where an item's onReadable simply never fired at
+// all while the very next item's did moments later -- both consistent with
+// a single-slot inbound buffer silently overwritten by a faster-than-drain
+// write, mirroring the already-known single-slot *outbound* constraint
+// (Message.write() throwing back-to-back, see docs/pebble-alloy/SKILL.md).
+// This delay gives the watch time to fully process one item before pkjs
+// fires the next. Verified with 200ms in a clean, contamination-free
+// 10-run emulator repro (single "ready" listener, no localStorage
+// dependency): 0/10 first-attempt losses, vs. 2/10 in a same-methodology
+// 10-run baseline at 0ms -- see task-8b-report.md.
+const CONFIG_SEND_GAP_MS = 200;
+
 function sendItemsSequentially(items, index, retriesLeft) {
 	if (index >= items.length) return;
 	if (retriesLeft === undefined) retriesLeft = MAX_SEND_RETRIES;
 	Pebble.sendAppMessage(
 		items[index],
-		() => sendItemsSequentially(items, index + 1),
+		() => {
+			setTimeout(
+				() => sendItemsSequentially(items, index + 1),
+				CONFIG_SEND_GAP_MS
+			);
+		},
 		() => {
 			if (retriesLeft > 0) {
 				sendItemsSequentially(items, index, retriesLeft - 1);

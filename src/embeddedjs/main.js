@@ -112,7 +112,78 @@ const configMessage = new Message({
 	},
 });
 
+// Task 8b: reconciliation safety net, on top of the pkjs-side send-gap fix
+// (see CONFIG_SEND_GAP_MS in src/pkjs/index.js) that closed the specific
+// inbound-buffer race found via instrumented logging (task-8b-report.md).
+// A clean 10-run emulator repro reached 0/10 losses with the gap fix alone,
+// but this is a real-Bluetooth link never validated on physical hardware --
+// added as defense-in-depth given a permanently incomplete `stops` list
+// would otherwise fail silently (Task 9's list screen has no error-state UI
+// yet to surface it). Forced-drop verification (task-8b-report.md) confirmed
+// this timer fires, requests a resend, and recovers configLoaded within one
+// cycle. Scoped to the FIRST config load of a session only (configLoaded
+// still false), matching the reported bug's worst case (configMeta itself
+// lost, onConfigReady never firing that session) -- a later config update
+// losing an item is not covered (out of this task's scope, flagged in
+// task-8b-report.md).
+let configResendTimer = null;
+let configResendCount = 0;
+const CONFIG_RESEND_TIMEOUT_MS = 4000;
+const MAX_CONFIG_RESENDS = 3;
+
+function scheduleConfigResendTimeout() {
+	if (configResendTimer !== null) return; // already scheduled
+	configResendTimer = setTimeout(
+		onConfigResendTimeout,
+		CONFIG_RESEND_TIMEOUT_MS
+	);
+}
+
+function clearConfigResendTimeout() {
+	if (configResendTimer !== null) {
+		clearTimeout(configResendTimer);
+		configResendTimer = null;
+	}
+}
+
+function onConfigResendTimeout() {
+	configResendTimer = null;
+	if (configLoaded) return; // resolved itself between scheduling and firing
+	if (configResendCount >= MAX_CONFIG_RESENDS) {
+		console.log(
+			"configResendRequest: giving up after " +
+				MAX_CONFIG_RESENDS +
+				" attempts, config still not loaded"
+		);
+		return;
+	}
+	configResendCount++;
+	console.log(
+		"configResendRequest: attempt " +
+			configResendCount +
+			"/" +
+			MAX_CONFIG_RESENDS
+	);
+	const m = new Map();
+	m.set("itemType", "configResendRequest");
+	try {
+		configMessage.write(m);
+	} catch (error) {
+		// Same try/catch pattern as tryWriteRefreshStop/departureMessage
+		// (Task 8): the single outbound slot may be busy. Not retried
+		// immediately -- the next scheduleConfigResendTimeout() below
+		// covers it, so a busy slot just delays this attempt rather than
+		// silently dropping it.
+		console.log(
+			"configResendRequest: write failed (outbound slot busy): " + error
+		);
+	}
+	scheduleConfigResendTimeout();
+}
+
 function handleConfigItem(item) {
+	if (!configLoaded) scheduleConfigResendTimeout();
+
 	if (item.itemType === "configMeta") {
 		scheduleDaysBitmask = item.scheduleDaysBitmask;
 		scheduleStartMinutes = item.scheduleStartMinutes;
@@ -136,6 +207,7 @@ function handleConfigItem(item) {
 		stops = pendingStops;
 		alertLines = pendingLines;
 		configLoaded = true;
+		clearConfigResendTimeout();
 		onConfigReady();
 	}
 }
