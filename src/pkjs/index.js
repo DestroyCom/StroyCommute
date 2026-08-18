@@ -16,25 +16,26 @@ const CONFIG_HTML = `<!DOCTYPE html>
 <title>StroyCommute Settings</title>
 <style>
   * { box-sizing: border-box; }
-  body { font-family: sans-serif; margin: 0; padding: 12px; font-size: 16px; color: #222; }
-  h2 { margin: 4px 0 16px; }
-  fieldset { border: 1px solid #ddd; border-radius: 8px; margin-bottom: 16px; padding: 12px; }
-  legend { font-weight: bold; padding: 0 4px; }
-  input[type="text"], input[type="time"] { width: 100%; font-size: 16px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; margin-top: 4px; }
-  button { font-size: 15px; padding: 10px 14px; border: none; border-radius: 4px; background: #4444ff; color: white; }
+  html, body { background: #000; }
+  body { font-family: sans-serif; margin: 0; padding: 12px; font-size: 16px; color: #eee; }
+  h2 { margin: 4px 0 16px; color: #fff; }
+  fieldset { border: 1px solid #333; border-radius: 8px; margin-bottom: 16px; padding: 12px; }
+  legend { font-weight: bold; padding: 0 4px; color: #fff; }
+  input[type="text"], input[type="time"] { width: 100%; font-size: 16px; padding: 8px; border: 1px solid #444; border-radius: 4px; margin-top: 4px; background: #111; color: #eee; }
+  button { font-size: 15px; padding: 10px 14px; border: none; border-radius: 4px; background: #5555ff; color: white; }
   button.remove { background: #cc4444; padding: 8px 12px; }
-  .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; padding: 10px; background: #f2f2f6; border-radius: 6px; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; padding: 10px; background: #1c1c22; border-radius: 6px; }
   .rowLabel { flex: 1; font-size: 15px; }
-  .searchResults { border: 1px solid #ccc; border-radius: 4px; max-height: 220px; overflow-y: auto; margin-top: 4px; }
-  .searchResultItem { padding: 10px; border-bottom: 1px solid #eee; }
+  .searchResults { border: 1px solid #444; border-radius: 4px; max-height: 220px; overflow-y: auto; margin-top: 4px; }
+  .searchResultItem { padding: 10px; border-bottom: 1px solid #333; }
   .searchResultItem:last-child { border-bottom: none; }
-  .searchResultItem:active { background: #e8e8f8; }
-  .searchStatus { padding: 8px; font-size: 0.9em; color: #666; }
+  .searchResultItem:active { background: #26263a; }
+  .searchStatus { padding: 8px; font-size: 0.9em; color: #999; }
   .dayRow { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 8px; }
   .dayRow label { display: inline-flex; align-items: center; gap: 4px; }
   .timeRow { display: flex; gap: 16px; flex-wrap: wrap; }
   .timeRow label { display: flex; flex-direction: column; font-size: 0.9em; flex: 1; min-width: 120px; }
-  #itemCount { font-size: 0.9em; color: #666; }
+  #itemCount { font-size: 0.9em; color: #999; }
 </style>
 </head>
 <body>
