@@ -27,6 +27,7 @@
 		"watchapp": {
 			"watchface": false
 		},
+		"capabilities": ["configurable"],
 		"messageKeysNote": "JSON has no comments, so this field carries the warning instead: order matters here and must exactly match ALL_MESSAGE_KEYS in src/embeddedjs/main.js (10000 + array-index numbering). Keep both in sync on any add/remove/reorder -- see that file's comment for why.",
 		"messageKeys": [
 			"itemIndex",
