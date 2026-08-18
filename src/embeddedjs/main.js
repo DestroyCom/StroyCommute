@@ -33,6 +33,17 @@ let pendingLines = [];
 // file must build its `keys` option from this canonical map instead of a
 // bare array, so codes always match package.json regardless of which
 // keys a given instance subscribes to or in what order.
+//
+// !!! KEEP IN EXACT SYNC WITH `pebble.messageKeys` IN package.json !!!
+// This array is a second, hand-maintained copy of that list — same keys,
+// same order, nothing added/removed/reordered on one side without the
+// other. There is no automated drift guard (no build-time codegen step
+// ties the two together — deliberately not built, per YAGNI, since a
+// loud comment on both sides is the minimum bar and a codegen step risks
+// fighting Alloy's bundler for uncertain benefit). If you add, remove, or
+// reorder a key in package.json's `pebble.messageKeys`, make the exact
+// same edit here, or every `Message` instance in this file will silently
+// decode fields under the wrong name again — see the paragraph above.
 const ALL_MESSAGE_KEYS = [
 	"itemIndex",
 	"itemCount",
@@ -226,7 +237,24 @@ function flushRefreshQueue() {
 }
 
 function requestRefresh() {
-	refreshQueue = stops.slice();
+	// Merge, don't overwrite: if the previous round hasn't fully drained
+	// (e.g. a Bluetooth stall keeps the single outbound slot busy across a
+	// tick boundary), `refreshQueue = stops.slice()` would silently discard
+	// whatever was still pending and reset every stop to the front of the
+	// queue — starving stops that were already waiting longer in favor of
+	// ones that already got sent last round. Append only stops not already
+	// queued (dedup by stopRef) so pending items keep their place in line.
+	if (refreshQueue.length > 0) {
+		console.log(
+			`requestRefresh: ${refreshQueue.length} refreshStop(s) from the previous round still queued — merging instead of overwriting`
+		);
+	}
+	for (const stop of stops) {
+		const alreadyQueued = refreshQueue.some(
+			(queued) => queued.stopRef === stop.stopRef
+		);
+		if (!alreadyQueued) refreshQueue.push(stop);
+	}
 	flushRefreshQueue();
 }
 
