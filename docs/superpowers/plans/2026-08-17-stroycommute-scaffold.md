@@ -1132,6 +1132,129 @@ git commit -m "embeddedjs: 45s refresh timer, request/receive departures via App
 
 ---
 
+## Task 8b: config delivery reliability — fix intermittent item loss (added 2026-08-18)
+
+Not in the original plan. Task 7/8's testing surfaced a real bug in
+already-completed Task 5/6's protocol: pkjs's ack-chained
+`sendItemsSequentially` (`src/pkjs/index.js`) believes every send
+succeeded (each `onAck` fires normally), but roughly 1 in 3 test runs the
+watch's `configMessage.onReadable` (`src/embeddedjs/main.js`) never
+fires for one of the items — sometimes `configMeta` itself, which blocks
+`onConfigReady` from ever firing that session since
+`handleConfigItem`'s completion check (`item.itemIndex === pendingConfigCount - 1`)
+never becomes true. See `docs/pebble-alloy/SKILL.md`'s "Individual
+AppMessage items can still vanish..." entry for the full symptom writeup.
+Root cause not yet found. Blocks Task 9 in practice: the list screen
+reads `stops`, which this bug can leave permanently incomplete or
+`configLoaded` permanently false for a whole app session.
+
+**Files:**
+- Modify: `src/pkjs/index.js`, `src/embeddedjs/main.js`, possibly
+  `package.json` (`pebble.messageKeys`) if a resend-request needs a new
+  wire item type — reuse `itemType`'s existing string-enum field for the
+  new request name rather than adding a new key if possible.
+
+**Interfaces:**
+- Consumes: Task 5's `sendConfigToWatch`/`sendItemsSequentially`, Task
+  6's `handleConfigItem`/`pendingConfigCount`/`pendingStops`/`pendingLines`.
+  Do not change their existing shapes — Task 9-13 are written against
+  them.
+- Produces: whatever reliability mechanism the investigation in Step 1
+  justifies (see Step 2). Must not change `stops`/`alertLines`/
+  `configLoaded`/`onConfigReady`'s existing external contract — only the
+  internal path that populates them gets more robust.
+
+- [ ] **Step 1: Root-cause, don't guess (systematic-debugging)**
+
+  Before writing a fix, reproduce and instrument. Add temporary,
+  clearly-marked debug logging on both sides:
+  - pkjs: log a timestamp + item index immediately before each
+    `Pebble.sendAppMessage` call and immediately inside each `onAck`
+    callback.
+  - embeddedjs: log a timestamp + `item.itemIndex`/`item.itemType`
+    immediately inside `configMessage.onReadable`, before any other
+    processing.
+
+  Run the existing no-phone-needed test method from Task 6 (`pebble
+  send-app-message` CLI, or the hardcoded-trigger fallback from Task 5)
+  repeatedly — at least 10 runs — until at least 2-3 reproduce the loss.
+  Compare the two logs' timestamps and indices around a lost item:
+  - If pkjs's `onAck` for item N fires suspiciously close in time to
+    pkjs starting the send for item N+1 (i.e., no real gap), and the
+    watch's log shows N+1 arriving before N's `onReadable` had
+    seemingly finished being dispatched, that points to a race at the
+    embeddedjs runtime's inbound message buffer (plausible given Task
+    7/8 already found a *single-slot* constraint on the outbound side —
+    `Message.write()` throwing back-to-back; an analogous single-slot
+    inbound buffer would silently overwrite instead of throwing, since
+    nothing on the receive side surfaces an error today).
+  - If there's no such timing correlation (items lost at effectively
+    random gaps, no pattern), that points to a genuine unreliable-link
+    problem (Bluetooth packet loss at the OS layer) that a resend/reconciliation
+    protocol must handle regardless of root cause.
+
+  Record what the logs actually show in the report — this step's output
+  is evidence, not a fix yet.
+
+- [ ] **Step 2: Apply the fix the evidence supports**
+
+  Two fixes are pre-approved, pick based on Step 1's finding (both may
+  be needed):
+
+  **(a) Timing fix**, if Step 1 shows a race: add a short delay (start
+  with 150-200ms, tune from evidence) between an item's `onAck` firing
+  and the next item's `sendAppMessage` call in `sendItemsSequentially`.
+  Cheap, but only closes a race — retest to confirm the loss rate drops
+  to 0 across another 10 runs before considering this sufficient alone.
+
+  **(b) Reconciliation protocol**, if timing alone doesn't reliably
+  reach 0 losses, or Step 1 shows random loss with no timing pattern:
+  the watch requests a full resend when delivery looks incomplete.
+  - embeddedjs: when the first config item of a fresh session arrives
+    (`configLoaded` is still `false`), start a one-shot timer (4000ms —
+    generous relative to the observed round-trip times in prior
+    testing). Clear it if/when `configLoaded` becomes `true`. If the
+    timer fires while still not loaded, write `{itemType:
+    "configResendRequest"}` back through the existing `configMessage`
+    instance (it already carries `itemType` in its key set — no new
+    messageKey needed) using the same try/catch un-writable-slot pattern
+    already established for `departureMessage`/`tryWriteRefreshStop` in
+    Task 8. Cap at 3 resend requests total per session (matches Task 5's
+    existing retry-cap precedent); after the cap, log an error to
+    console and stop retrying — Task 9 doesn't have an error-state UI
+    yet, so there's nothing else to do here today, and this task must
+    not invent one.
+  - pkjs: in the existing `appmessage` listener
+    (`src/pkjs/index.js`), handle `itemType === "configResendRequest"`
+    by calling `sendConfigToWatch()` again from scratch — reuse it
+    as-is, don't special-case a partial resend (Task 6's
+    `handleConfigItem` already resets `pendingStops`/`pendingLines` on
+    a fresh `configMeta`, so a full resend is safe to receive mid-session).
+
+  Whichever fix (or combination) is applied, re-run the same 10+-run
+  test from Step 1 afterward and report the before/after loss rate with
+  real numbers, not "seems better."
+
+- [ ] **Step 3: Manual verification**
+
+  Confirm via `pebble logs` across the repeated test runs: `stops`/
+  `alertLines` end up complete and `onConfigReady` fires reliably. If
+  using the resend path, force at least one real resend to fire (e.g.
+  by temporarily dropping/ignoring the first config item on the watch
+  side) and confirm the second attempt succeeds and `configLoaded`
+  ends up `true`. Remove any temporary drop-simulation code before
+  committing.
+
+- [ ] **Step 4: Lint and commit**
+
+  ```bash
+  pnpm run lint
+  git add src/pkjs/index.js src/embeddedjs/main.js package.json
+  git commit -m "Fix intermittent config item loss in phone-to-watch delivery"
+  ```
+
+---
+
 ## Task 9: embeddedjs — list screen
 
 **Files:**
