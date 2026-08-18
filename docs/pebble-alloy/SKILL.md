@@ -171,6 +171,111 @@ see `src/embeddedjs/main.js`'s `tryWriteRefreshStop`/`flushRefreshQueue`.
   both narrow and non-crashing, worth a dedup pass if ever observed on
   real hardware (all testing so far is emulator-only).
 
+## Config page (showConfiguration) — three real, confirmed gotchas
+
+All three found via real phone+watch testing (Task 4/5's code had never
+been exercised through the actual Pebble mobile app before this — every
+prior test used a hardcoded-trigger fallback specifically because no phone
+was available to those dispatches):
+
+1. **`package.json`'s `pebble` block needs `"capabilities": ["configurable"]`**
+   for the phone app to show the settings gear/icon for the watchapp at
+   all — confirmed against the official docs
+   (`developer.repebble.com/guides/user-interfaces/app-configuration/`),
+   which state this is the only requirement. Without it, `showConfiguration`/
+   `webviewclosed` are simply unreachable from the real app, even though
+   the code itself is correct. (A full app delete + reinstall on the phone
+   was also needed once, in this project's case, for the gear to actually
+   appear after adding the field — plain metadata caching, not a separate
+   bug.)
+2. **The config page must close via `document.location = "pebblejs://close#" + data`,
+   not `"pebble://close#"`.** Confirmed via primary source: Clay (the
+   standard config framework for the modern Rebble/CloudPebble ecosystem,
+   `github.com/pebble-dev/clay/blob/main/src/scripts/config-page.js:11`)
+   uses `window.returnTo || 'pebblejs://close#'` as its default. The wrong
+   scheme doesn't error inside `webviewclosed` — it fails one layer up: the
+   phone's webview never recognizes the navigation as a close signal, so it
+   falls through to the real network stack, which doesn't know the
+   `pebble://` scheme (`net::ERR_UNKNOWN_URL_SCHEME`).
+3. **Mobile keyboards can silently corrupt free-typed ID-shaped fields.**
+   iOS smart punctuation / Android predictive text can insert a space
+   after `:` while typing an identifier like `STIF:StopPoint:Q:463158:`,
+   with no visual indication anything changed. `autocorrect="off"
+   autocapitalize="off" autocomplete="off" spellcheck="false"` on the
+   input reduces this but isn't a guarantee across every keyboard —
+   strip all whitespace from any such field's value at save time
+   regardless (`value.replace(/\s+/g, "")`). Better still (this project's
+   eventual fix): don't let users free-type IDs at all — resolve them from
+   a live search/select instead, e.g. against IDFM's public open-data
+   catalog (see `docs/idfm-api-reference.md` if it exists, or this
+   project's `config/index.html` for a working example).
+
+## Piu navigation and hardware buttons — real Behavior, not pebble/button's Button
+
+**Confirmed on real hardware (Task 9/10 follow-up) and against a real, working
+multi-screen Piu app** (`Moddable-OpenSource/pebble-examples`,
+`piu/apps/words`, specifically `modules/piuView.js`'s `ViewBehavior`): in a
+Piu-based screen (anything using `Application`/`Container`/`Skin`/`Style`
+etc.), hardware button presses are routed to the **focused container's
+`Behavior`**, via methods named `onPressSelect`/`onPressUp`/`onPressDown`/
+`onPressBack` (and their `onRelease*` counterparts) — NOT through the
+separate, lower-level `pebble/button` module's `Button` class
+(`new Button({types: [...], onPush(down, type) {...}})`).
+
+A standalone `Button` instance **does** still receive presses in a Piu app
+(confirmed via on-device logging — `onPush` fires correctly, with the
+correct `type` and `down` value) — but it runs *alongside* Piu's own native
+button routing rather than replacing or suppressing it. Concretely: even
+with `"back"` included in the `Button`'s `types` (which
+`developer.repebble.com/guides/alloy/sensors-and-input/` documents as
+sufficient to disable the OS's automatic exit-on-back, replaced by
+press-and-hold instead), a Piu app still exits to the watch's app launcher
+on a single back press, regardless of what the `Button`'s `onPush` callback
+does — the documented override only applies to the non-Piu code path.
+
+**The correct pattern**, confirmed working:
+```javascript
+class MainBehavior extends Behavior {
+  onPressSelect() {
+    // ... handle select ...
+    return true; // handled — stops here
+  }
+  onPressBack() {
+    if (/* nothing to go back to */) return; // falls through — OS exits as usual
+    // ... navigate back ...
+    return true; // handled — consumes the press, OS does not exit
+  }
+}
+
+const application = new Application(null, {
+  /* ...skin, contents, etc... */
+  Behavior: MainBehavior,
+});
+application.focus(); // REQUIRED — Piu only routes button presses to a focused container
+```
+Returning a truthy value from an `onPress*` method means "handled, stop
+here"; returning nothing/falsy lets the platform's default behavior apply
+— for `onPressBack` specifically, that default is app exit, which is
+exactly what you want at your app's root/home screen. Only intercept (and
+return `true` from) `onPressBack` on screens that have somewhere to
+navigate back *to*.
+
+`Behavior` needs no import — like `Skin`/`Style`/`Container`/`Application`,
+it's injected as a global by the SDK's pebble host (see the
+`import {} from "piu/MC"` note above). `application.focus()` is required
+once, after construction; without it, none of `MainBehavior`'s `onPress*`
+methods ever fire (a container with no explicit `.focus()` call never
+becomes the input target).
+
+This project's original list/detail screens (Tasks 9/10) used the
+`Button` class and had this exact bug — back exited to the launcher
+instead of returning to the list. Fixed by migrating to this `Behavior`
+pattern; no other screen logic needed to change (`buildListScreen()`/
+`buildDetailScreen()`/`renderCurrentScreen()` are unaffected — only the
+input-handling plumbing changed). Any future screen/button work in this
+project should use `Behavior`'s `onPress*` methods from the start, never
+`pebble/button`'s `Button` class, for anything built on Piu.
+
 ## Before generating code
 
 1. Check whether `docs/pebble-api-reference.md` already covers the API in
