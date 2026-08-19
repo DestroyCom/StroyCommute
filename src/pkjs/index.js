@@ -838,11 +838,29 @@ Pebble.addEventListener("ready", sendStoredConfigToWatch);
 // lives here, not in embeddedjs (see idfm-api-reference.md's UTC gotcha).
 /**
  * @param {object} call - A SIRI MonitoredCall.
- * @returns {number} Minutes from now until `call.ExpectedArrivalTime`.
+ * @returns {number|null} Minutes from now until the call's best available
+ *   time field, or null if none of them are usable. Real-hardware evidence
+ *   (the "undefined min" bug): `ExpectedArrivalTime` is absent on some real
+ *   PRIM calls -- e.g. a bus/tram still at its origin stop, which only
+ *   reports a departure time -- which previously produced NaN here. NaN
+ *   isn't a valid AppMessage tuple value; pkjs's sendAppMessage silently
+ *   dropped the "minutes" key rather than throwing, so the watch decoded a
+ *   `state: "ok"` update with no minutes field at all -- rendering the
+ *   literal string "undefined min". Falling back across the other SIRI time
+ *   fields, and returning null instead of NaN when truly none are present,
+ *   fixes it at the source: the caller sends `state: "noRealtimeData"`
+ *   instead (an already-handled UI state) rather than a broken "ok".
  */
 function callMinutesRemaining(call) {
-	const expected = new Date(call.ExpectedArrivalTime);
-	return Math.round((expected.getTime() - Date.now()) / 60000);
+	const timeField =
+		call.ExpectedArrivalTime ||
+		call.ExpectedDepartureTime ||
+		call.AimedArrivalTime ||
+		call.AimedDepartureTime;
+	if (!timeField) return null;
+	const expected = new Date(timeField);
+	const minutes = Math.round((expected.getTime() - Date.now()) / 60000);
+	return Number.isNaN(minutes) ? null : minutes;
 }
 
 // Dev-only escape hatch: real PRIM calls are quota-limited (a handful of
@@ -853,6 +871,37 @@ function callMinutesRemaining(call) {
 // round-trip the real path uses, just without hitting PRIM. Must be false
 // for any real/shipped build.
 const DEV_FAKE_DEPARTURES = false;
+
+// Quota tracking, for the watch's settings screen ("Quota PRIM: N
+// restant(s)"). PRIM doesn't expose a "remaining calls" endpoint, so this
+// is a local count of requests this app itself made -- an approximation,
+// not the account's true server-side quota (e.g. a shared key used by
+// another app wouldn't be reflected), but the best available without one.
+// 1000/day matches docs/idfm-api-reference.md's documented default for
+// tokens generated after March 2024 (re-verify at the portal if this ever
+// looks wrong for a given key).
+const PRIM_DAILY_QUOTA = 1000;
+let lastQuotaRemaining = null;
+
+/** @returns {string} Today's date as YYYY-MM-DD (UTC). */
+function todayUtc() {
+	return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Increments today's persisted PRIM request counter (reset when the UTC
+ * date rolls over) and returns the remaining quota.
+ * @returns {number} Requests remaining today, floored at 0.
+ */
+function recordPrimRequestAndGetQuotaRemaining() {
+	const today = todayUtc();
+	const stored = localStorage.getItem("stroycommuteQuota");
+	let state = stored ? JSON.parse(stored) : null;
+	if (!state || state.date !== today) state = { date: today, count: 0 };
+	state.count += 1;
+	localStorage.setItem("stroycommuteQuota", JSON.stringify(state));
+	return Math.max(0, PRIM_DAILY_QUOTA - state.count);
+}
 
 /**
  * Fabricates a plausible "ok" departureUpdate for `stopRef`, for UI
@@ -922,12 +971,24 @@ function handleRefreshStop(request) {
 			const atStop = call.VehicleAtStop === true;
 			const minutes = atStop ? -1 : callMinutesRemaining(call);
 
+			// callMinutesRemaining returns null when PRIM gave this call no
+			// usable time field at all (see its doc comment) -- send the
+			// already-handled "no real-time data" state rather than an "ok"
+			// update missing its "minutes" field (the "undefined min" bug).
+			if (minutes === null) {
+				sendDepartureUpdate(request.stopRef, "noRealtimeData");
+				return;
+			}
+
 			// visits[] for one specific stop_id+line is a real, direction-stable
 			// SIRI stop-monitoring result (a stop_id is one physical
 			// platform/direction, see idfmIdToStif in CONFIG_HTML) -- so a
 			// second entry is genuinely the following vehicle on the same
 			// route+direction, not a different branch. Only sent when PRIM
-			// actually returned one (small stops sometimes don't).
+			// actually returned one (small stops sometimes don't) AND it has a
+			// usable time field -- omitted, not sent as null/NaN, when it
+			// doesn't (the watch already treats a missing minutes2 as "no
+			// following departure known").
 			const extra = {
 				lineName: request.lineName,
 				destination: call.DestinationDisplay
@@ -939,8 +1000,9 @@ function handleRefreshStop(request) {
 			};
 			if (visits.length > 1) {
 				const call2 = visits[1].MonitoredVehicleJourney.MonitoredCall;
-				extra.minutes2 =
+				const minutes2 =
 					call2.VehicleAtStop === true ? -1 : callMinutesRemaining(call2);
+				if (minutes2 !== null) extra.minutes2 = minutes2;
 			}
 
 			sendDepartureUpdate(request.stopRef, "ok", extra);
@@ -952,6 +1014,7 @@ function handleRefreshStop(request) {
 	xhr.onerror = () => {
 		sendDepartureUpdate(request.stopRef, "network");
 	};
+	lastQuotaRemaining = recordPrimRequestAndGetQuotaRemaining();
 	xhr.send();
 }
 
@@ -971,5 +1034,9 @@ function sendDepartureUpdate(stopRef, state, extra) {
 		},
 		extra || {}
 	);
+	// Attached to every reply regardless of state (including error states --
+	// a request against the quota was made either way) so the watch's
+	// settings screen always reflects the latest known count.
+	if (lastQuotaRemaining !== null) payload.quotaRemaining = lastQuotaRemaining;
 	Pebble.sendAppMessage(payload);
 }

@@ -71,6 +71,7 @@ const ALL_MESSAGE_KEYS = [
 	"lineColor",
 	"lineTextColor",
 	"minutes2",
+	"quotaRemaining",
 ];
 const MESSAGE_KEY_CODES = new Map(
 	ALL_MESSAGE_KEYS.map((key, index) => [key, 10000 + index])
@@ -285,6 +286,12 @@ function handleConfigItem(item) {
 
 const departures = new Map();
 
+// Latest known PRIM quota remaining, shown on the settings screen. Global
+// (not per-stop) -- pkjs attaches it to every departureUpdate it sends
+// (see sendDepartureUpdate in src/pkjs/index.js), so this just tracks
+// whichever value arrived most recently. null until the first reply.
+let quotaRemaining = null;
+
 const departureMessageKeys = [
 	"itemType",
 	"stopRef",
@@ -296,6 +303,7 @@ const departureMessageKeys = [
 	"atStop",
 	"cancelled",
 	"minutes2",
+	"quotaRemaining",
 ];
 
 // Same Message instance handles both directions of this protocol (receive
@@ -312,6 +320,10 @@ const departureMessage = new Message({
 		});
 		if (item.itemType !== "departureUpdate") return;
 
+		if (typeof item.quotaRemaining === "number") {
+			quotaRemaining = item.quotaRemaining;
+		}
+		pendingRefreshStops.delete(item.stopRef);
 		departures.set(item.stopRef, {
 			state: item.state,
 			line: item.lineName,
@@ -343,7 +355,37 @@ const departureMessage = new Message({
 });
 
 let refreshTimer = null;
-let refreshQueue = [];
+const refreshQueue = [];
+
+// stopRefs with a refreshStop request in flight -- drives the spinner
+// marker appended to the status line in buildDetailScreen. Cleared on the
+// matching departureUpdate; also auto-cleared after
+// REFRESH_INDICATOR_TIMEOUT_MS so a dropped reply (this project has hit
+// real single-slot AppMessage drops before, see the comments around
+// departureMessage/flushRefreshQueue) doesn't leave the marker stuck
+// forever -- the 45s timer will mark it pending again on its own anyway.
+const pendingRefreshStops = new Set();
+const REFRESH_INDICATOR_TIMEOUT_MS = 15000;
+
+// Plain-ASCII spinner (not a real icon glyph -- Gothic bitmap font lacks
+// arrow/spinner Unicode characters, same tofu problem already hit with
+// ▲▼, and a real bitmap/SVG icon needs its own resource-pipeline work with
+// real memory-crash risk on this project's history, see mdbl.c's
+// ModdableCreationRecord comment). Cycles while any stop is pending,
+// giving a genuinely animated "refreshing" cue instead of a static "...".
+const SPINNER_FRAMES = ["-", "\\", "|", "/"];
+let spinnerFrame = 0;
+let spinnerTimer = null;
+
+/** Starts the spinner animation tick, once. Re-renders only while something is actually pending. */
+function startSpinnerTimer() {
+	if (spinnerTimer) return;
+	spinnerTimer = setInterval(() => {
+		if (pendingRefreshStops.size === 0) return;
+		spinnerFrame = (spinnerFrame + 1) % SPINNER_FRAMES.length;
+		renderCurrentScreen();
+	}, 250);
+}
 
 /**
  * Attempts one `refreshStop` write for `stop`.
@@ -396,7 +438,13 @@ function requestRefresh() {
 		(queued) => queued.stopRef === item.stopRef
 	);
 	if (!alreadyQueued) refreshQueue.push(item);
+	pendingRefreshStops.add(item.stopRef);
+	renderCurrentScreen(); // shows the "..." refresh marker immediately
 	flushRefreshQueue();
+	const stopRef = item.stopRef;
+	setTimeout(() => {
+		if (pendingRefreshStops.delete(stopRef)) renderCurrentScreen();
+	}, REFRESH_INDICATOR_TIMEOUT_MS);
 }
 
 /** Starts the 45s foreground departure-refresh timer, once. */
@@ -470,6 +518,13 @@ function buildItemList() {
 			lineName: line.lineName,
 		});
 	}
+	// Settings screen, always last -- only once config has actually loaded
+	// (avoids flashing it in front of the boot-time "Chargement..." state,
+	// and it's a real destination even with zero tracked stops/lines: a
+	// fresh install has nothing else to show anyway).
+	if (configLoaded) {
+		items.push({ type: "settings" });
+	}
 	return items;
 }
 
@@ -488,10 +543,17 @@ let selectedIndex = 0;
 // Single-screen app (2026-08-19): the separate list/detail modes were
 // removed -- the app now always shows buildDetailScreen() for whichever
 // item selectedIndex points to; up/down cycles between tracked stops
-// exactly as it did on the list screen before. No onPressSelect/onPressBack
-// overrides needed any more: Select falls through as a no-op, and Back
-// falls through to the OS's normal exit-on-back, since this is now the
-// app's only screen (nothing to "return" to).
+// exactly as it did on the list screen before, now wrapping at both ends
+// (last item's "down" goes back to the first, and vice versa) rather than
+// clamping. Back still falls through to the OS's normal exit-on-back, since
+// this is the app's only screen (nothing to "return" to). Select forces an
+// immediate refresh on a stop screen; a no-op elsewhere (settings, alert --
+// no PRIM data to refresh there). An earlier attempt also used Select on
+// the settings screen to open the phone-side config webview via a watch ->
+// pkjs -> Pebble.openURL round-trip; dropped (2026-08-20) after repeated
+// real-hardware failures (Pebble.openURL never actually opened the
+// webview, root cause not resolved) -- settings are reachable via the
+// phone app's own settings gear.
 /** Hardware-button routing for the app's single Application/root Container. */
 class MainBehavior extends Behavior {
 	onPressUp() {
@@ -502,12 +564,31 @@ class MainBehavior extends Behavior {
 		this.step(1);
 		return true;
 	}
-	/** Moves selectedIndex by `direction`, clamped in range, and re-fetches. */
+	onPressSelect() {
+		// Guard against firmware auto-repeat: real-hardware logs show
+		// onPressSelect firing many times over a single held press with no
+		// onReleaseSelect in between (the same mechanism that makes holding
+		// Up/Down fast-scroll) -- collapse to exactly one action per
+		// physical press.
+		if (this.selectDown) return true;
+		this.selectDown = true;
+		const item = buildItemList()[selectedIndex];
+		// Deliberately not `item?.type` -- see requestRefresh()'s comment on
+		// this exact pattern (broken optional-chaining on this XS engine).
+		// biome-ignore lint/complexity/useOptionalChain: see comment above
+		if (!item || item.type !== "stop") return true;
+		requestRefresh();
+		return true;
+	}
+	onReleaseSelect() {
+		this.selectDown = false;
+		return true;
+	}
+	/** Moves selectedIndex by `direction`, wrapping around, and re-fetches. */
 	step(direction) {
 		const items = buildItemList();
 		if (items.length === 0) return;
-		const maxIndex = Math.max(0, items.length - 1);
-		selectedIndex = Math.max(0, Math.min(maxIndex, selectedIndex + direction));
+		selectedIndex = (selectedIndex + direction + items.length) % items.length;
 		renderCurrentScreen();
 		requestRefresh(); // fetch immediately for the newly-selected stop
 	}
@@ -666,6 +747,14 @@ function buildDetailScreen() {
 				: dep.atStop
 					? "À quai"
 					: `${dep.minutes} min`;
+			// Spinner refresh marker: a refreshStop for this stop is in flight
+			// (button press, screen switch, or the 45s timer) but hasn't
+			// replied yet. Appended to the already-rendered status rather than
+			// a separate element, to avoid disturbing this screen's tight
+			// vertical layout (see the top: offsets throughout this function).
+			const statusWithMarker = pendingRefreshStops.has(item.stopRef)
+				? `${status} ${SPINNER_FRAMES[spinnerFrame]}`
+				: status;
 			lines.push(
 				// Text (not Label) so a long destination -- "Vers Porte de
 				// Versailles (Parc des Expositions)" -- wraps onto a second
@@ -687,7 +776,7 @@ function buildDetailScreen() {
 					left: 8,
 					right: 8,
 					style: titleStyle,
-					string: status,
+					string: statusWithMarker,
 				})
 			);
 			// Following departure (minutes2), same direction/stop -- absent
@@ -704,6 +793,28 @@ function buildDetailScreen() {
 				);
 			}
 		}
+	} else if (item.type === "settings") {
+		lines.push(
+			new Label(null, {
+				top: 10,
+				left: 8,
+				right: 8,
+				style: titleStyle,
+				string: "Réglages",
+			})
+		);
+		lines.push(
+			new Label(null, {
+				top: 60,
+				left: 8,
+				right: 8,
+				style: bodyStyle,
+				string:
+					typeof quotaRemaining === "number"
+						? `Quota PRIM: ${quotaRemaining} restant(s)`
+						: "Quota PRIM: inconnu",
+			})
+		);
 	} else {
 		lines.push(
 			new Label(null, {
@@ -742,6 +853,7 @@ function renderCurrentScreen() {
 }
 
 renderCurrentScreen();
+startSpinnerTimer();
 
 // Ask for config immediately at boot, rather than passively waiting on
 // pkjs's own unprompted "ready" push (2026-08-19, real-device evidence):

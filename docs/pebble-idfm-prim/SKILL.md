@@ -93,10 +93,22 @@ AppMessage now carries traffic in both directions:
   lineName}`.
 - **phone→watch (`departureUpdate`)**: pkjs's reply to each `refreshStop`
   — `{itemType: "departureUpdate", stopRef, state, lineName, destination,
-  minutes, atStop, cancelled}`.
+  minutes, atStop, cancelled, quotaRemaining}`. `quotaRemaining` is a local
+  count of requests this app has made today against the documented daily
+  quota (not a true server-side count -- PRIM exposes no such endpoint),
+  attached to every reply regardless of `state` and shown on the watch's
+  settings screen.
 - **watch→phone (`alertForTimeline`)**: used once traffic alerts are
   implemented for real (currently dormant, `fetchLineAlerts()` is a stub
   in embeddedjs).
+
+A watch-side settings screen (always the last item in the up/down cycle,
+appended by `buildItemList()` once config has loaded) shows the tracked
+quota. It does NOT open the phone-side config webview from the watch — an
+attempt at that (`openSettings` AppMessage -> pkjs `Pebble.openURL`) never
+worked on real hardware (webview never opened, root cause unresolved) and
+was dropped 2026-08-20. Settings stay reachable only via the phone app's
+own settings gear (`showConfiguration` listener in src/pkjs/index.js).
 
 The API key never travels watch-bound — pkjs reads it from its own
 `localStorage` at fetch time, no `apiKey` AppMessage item is ever sent to

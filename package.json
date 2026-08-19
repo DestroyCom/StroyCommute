@@ -50,7 +50,8 @@
 			"cancelled",
 			"lineColor",
 			"lineTextColor",
-			"minutes2"
+			"minutes2",
+			"quotaRemaining"
 		],
 		"resources": {
 			"media": []
