@@ -60,6 +60,17 @@ And the Pebble framework docs and reference:
   entirely rather than fighting it byte by byte.
 - No npm dependencies on the embeddedjs side beyond what Alloy provides
   natively (constrained embedded environment)
+- `resources/images/icon.png` : the app's menu icon (launcher list on the
+  phone/watch). Wired via `package.json`'s `pebble.resources.media`
+  (`menuIcon: true`) — Alloy's own resource pipeline (waf's
+  `resources/` folder, `bld.path.find_node("resources")`), **not**
+  Moddable's separate `manifest.json`/`mc.xsa` resource archive used for
+  the embeddedjs runtime (same C-vs-JS-pitfall category as
+  `docs/pebble-alloy/SKILL.md`'s build-pipeline notes — two independent
+  resource systems in this one project). Max menu icon size is a hard
+  25×25px (waf-enforced, `max_menu_icon_dimensions` in the SDK's
+  `process_sdk_resources.py`); without a `menuIcon` resource the app falls
+  back to the SDK's generic placeholder square.
 
 ## Commands
 
