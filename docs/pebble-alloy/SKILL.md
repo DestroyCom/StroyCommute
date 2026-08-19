@@ -276,6 +276,234 @@ input-handling plumbing changed). Any future screen/button work in this
 project should use `Behavior`'s `onPress*` methods from the start, never
 `pebble/button`'s `Button` class, for anything built on Piu.
 
+## Watch-side memory ceiling and Piu Skin/Style/font constraints (real, confirmed 2026-08-18)
+
+This target has an extremely tight, largely fixed XS "chunk" memory pool
+(see the PRIM-fetch finding in the project CLAUDE.md — a real ~150-char URL
++ 32-char API key in one embeddedjs `fetch()` already came within ~16-40
+bytes of this ceiling). Adding a visual badge/board feature to
+`src/embeddedjs/main.js` hit this ceiling twice more, confirmed via real
+device crashes (not guessed):
+
+1. A batch of new module-scope `Skin`/`Style`/`Container` objects (line
+   badges, a station-board panel, minute-display boxes — roughly +3.5KB of
+   compiled code) crashed on first launch with `fxAbort memory full`,
+   before any config had even loaded — the crash is in constructing the
+   objects at module top-level, not in any network/data path. Deferring
+   construction to first-use (lazy singletons instead of eager `const`s)
+   did **not** fix it — the real cost is the compiled code itself, not
+   *when* it allocates.
+2. A much smaller-looking follow-up change (a text `Label` on the badge,
+   ~260 bytes, **combined with** bumping list-row font size from 18px to
+   24px Gothic in the same build) caused an even worse failure: a full
+   **watch freeze/hang**, not just an app crash — required a hardware
+   reset (hold the back button ~10s) to recover, not just a relaunch.
+3. Re-tested the badge-text `Label` alone (no font-size change this time,
+   confirmed-valid "bold 14px Gothic"), isolating it as the only change —
+   **still crashed** with `fxAbort memory full`. This ruled out
+   "compiled-size delta" as the operative variable (this change was only
+   ~260 bytes) and pointed at *runtime allocation churn* instead:
+   `buildListScreen()` constructed a fresh `new Style({...})` for the badge
+   text on every single render (up to 3 visible rows, and it re-renders on
+   every button press and every 45s refresh). **Fix, confirmed working on
+   real hardware**: cache the `Style` object per distinct color instead of
+   constructing it fresh each render (a `Map<color, Style>`, built lazily,
+   reused after that) — same pattern as the pre-existing `whiteSkin`/
+   `rowStyle`-style module-level constants, just keyed dynamically since the
+   color isn't known until config loads. The badge's `Skin` (also
+   constructed fresh per render) was *not* changed and has never crashed
+   across many tests — so the churn cost is specific to `Style`/font
+   resolution, not `Skin`/color fills in general (plausibly because
+   resolving a font is a heavier operation than a flat color fill).
+   **Any new per-row/per-render UI element with its own `Style` should be
+   cached the same way from the start**, not added as a bare `new Style()`
+   inside the render loop.
+4. Immediately after that fix, added a station-board `Container` (a `Skin`
+   + `Style` pair) to the *detail* screen — also as lazy singletons, same
+   caching pattern that just fixed #3, and *never even called* until the
+   user navigates to the detail screen. **Still crashed**, again with
+   `fxAbort memory full`, again very early (confirmed via `pebble logs`:
+   within ~1s of "Hello, Watchface.", before config had loaded) — this
+   *cannot* be the runtime-churn cost from #3 (the functions were never
+   invoked), so it points back to compiled code size/module-load cost
+   after all, for this specific addition. Total cumulative size at this
+   point (18.76KB) was still well under the very first crash's size
+   (20.9KB from item #1), so the safe ceiling is evidently **not a stable,
+   predictable byte count** — plausibly state-dependent on ambient watch
+   memory fragmentation from whatever ran before this app (a real,
+   unrelated watchapp, "UV Guard", was observed actively running/syncing
+   Timeline pins immediately before one of these crashes). Reverted the
+   board entirely; not yet re-attempted.
+
+**Practical implication**: there is no reliable formula for "how much new
+watch-side code is safe" on this target — only real-hardware confirmation.
+Budget real device-testing time for *any* embeddedjs UI addition, however
+small it looks on paper, and treat every addition as a genuine risk of a
+crash or full watch freeze until proven otherwise on the actual watch.
+
+**Rules that follow from this:**
+
+- Change **one thing at a time** on the watch side and get it confirmed
+  stable on real hardware before adding the next. Combining two changes in
+  one build makes it impossible to tell which one broke it without
+  reverting both.
+- `pebble build`'s printed "Total size of resources" is a rough signal,
+  not a safety guarantee — a small delta is not proof a change is safe,
+  it only rules out the *large*, obviously-reckless case. Also: **run
+  `pebble clean` before trusting that number on anything but a from-scratch
+  build** — confirmed the incremental build can silently reprint a stale
+  number even after Moddable's own `mcrun` step recompiled `main.js` (the
+  waf packaging/report step doesn't always notice the recompiled `mc.xsa`
+  changed).
+- If a crash or freeze happens, revert to the last hardware-confirmed-good
+  state immediately rather than debugging forward from a crashed device.
+- Comments (including JSDoc) are free — confirmed zero compiled-size
+  impact on a clean rebuild. Freely document watch-side code.
+- **Piu's `Skin` without a `texture` only draws plain axis-aligned
+  rectangles** (confirmed reading the SDK's `piuSkin.c` — the no-texture
+  draw path is a flat `fillColor` plus an optional plain rectangular
+  border via `borders`, there is no corner-radius/rounding support at
+  all). A circle or rounded-rect badge needs a texture asset, and this
+  project has not yet confirmed a working path to add one: Moddable's own
+  asset pipeline (a `manifest.json` with image resources, auto-tinted via
+  `Skin({texture, color})` per `PiuSkinCreate`'s `piuSkinColorized` path)
+  is not exposed through Alloy's `package.json`-driven build for a
+  `"projectType": "moddable"` project — `pebble.resources.media` is the
+  **classic C-SDK** resource pipeline (`.pbi`/pbpack), effectively
+  bypassed for moddable projects (just an auto-injected opaque `mc.xsa`
+  blob). Adding a real texture asset is an unstarted spike, not a known
+  quantity.
+- **Gothic bitmap font sizes are fixed, confirmed via the SDK's
+  `pebble_fonts.h`: 9, 14, 18, 24, 28 (bold: 14, 18, 24, 28 only — no bold
+  9).** Any other size (e.g. "16px Gothic", "20px Gothic") does not error
+  at build time — it fails at runtime with a `URIError: font not found
+  gothic-bold-16.fnt` (or similar), discovered only on real hardware.
+  Always pick a font size from this exact list.
+
+### Root cause and applied fix (2026-08-19)
+
+Investigated the memory-ceiling mechanism directly in the Moddable SDK
+toolchain source (`~/Library/Application Support/Pebble SDK/SDKs/4.33.1/toolchain/moddable`)
+rather than guessing further from symptoms:
+
+- The pebble target's **base** Moddable manifest
+  (`build/devices/pebble/manifest.json`) sets XS engine `creation` values:
+  `static: 32768`, `chunk.initial: 8192` (matches the ~8KB figure seen in
+  real crash logs), `heap.initial: 512` slots, `stack: 384`. This
+  project's own `src/embeddedjs/manifest.json` did not override any of
+  it — inherited as-is, silently.
+- Growth beyond `chunk.initial` (default `chunk.incremental` = 1024, not
+  disabled) falls back to `fxGrowChunks` -> `fxAllocateChunks` ->
+  `c_malloc`, which on the pebble platform
+  (`xs/platforms/pebble/xsHost.h:227`) is `#define c_malloc(a)
+  app_malloc(a)` — the real Pebble OS per-app heap allocator.
+- Official Moddable docs
+  (`documentation/tools/manifest.md`) recommend, for constrained/embedded
+  targets, disabling `static` (0) or, if kept nonzero, disabling
+  `chunk.incremental`/`heap.incremental` (0) for a strictly bounded
+  budget. The pebble base manifest does neither, so growth is silently
+  enabled by default.
+- **Corroborating upstream evidence**: an open, unresolved GitHub issue
+  (Moddable-OpenSource/moddable#1647, filed 2026-06-30) confirms that on
+  this exact Pebble/Alloy port, the XS "static" machine can land in the
+  **kernel (privileged) heap** rather than an isolated per-app heap,
+  causing MPU faults. The filed repro is FFI-specific (this project uses
+  no custom FFI), so it's not proven identical, but it's strong evidence
+  that XS memory here isn't reliably isolated from kernel/ambient-state
+  pressure — which fits the observed non-determinism (crashes not tied to
+  a stable byte threshold, one crash coincident with another app's
+  Timeline sync).
+
+**First fix attempt was a dead end**: `src/embeddedjs/manifest.json`'s
+`creation` field looked like the right lever (it's the documented XS
+manifest mechanism) and passed clean on the emulator (`pebble install
+--emulator emery`, stress-tested with `pebble emu-button`) — but it had
+**zero effect on the real device build**. Traced why: Alloy's `pebble
+build` pipeline produces the shipped `mc.xsa` via `mcrun`
+(`run_moddable_prebuild` in pebble-tool's `build.py`), and `mcrun`'s own
+generated makefile
+(`build/mods/emery/mcrun/tmp/pebble/debug/embeddedjs/makefile`) invokes
+`xsl -a ...` with **no `-c`/creation flag at all** — `mc.xsa` is just a
+preloaded-module archive (`-a`), not a standalone machine. The manifest's
+`"creation"` object only matters for `mcconfig`-driven standalone/simulator
+builds, never for the actual Alloy-on-Pebble deployment path. Confirmed on
+real hardware: this build still crashed identically
+(`fxAbort memory full`, "Chunk allocation: failed for 24 bytes") after
+saving a few tracked stops in config — proof the override never took
+effect. **Don't use `src/embeddedjs/manifest.json`'s `"creation"` field to
+tune memory for this project — it's inert for the real device build.**
+
+**Real fix, found and confirmed on real hardware (2026-08-19)**: the
+actual lever is `ModdableCreationRecord` passed to `moddable_createMachine()`
+in `src/c/mdbl.c` (declared in the Pebble SDK's own `pebble.h`, distinct
+from anything in the Moddable manifest system):
+```c
+typedef struct {
+    uint32_t recordSize;
+    uint32_t stack;   // Stack size in bytes (0 for default)
+    uint32_t slot;    // Slot heap size in bytes (0 for default)
+    uint32_t chunk;   // Chunk heap size in bytes (0 for default)
+    uint32_t flags;
+    void *fxBuildFFI;
+} ModdableCreationRecord;
+```
+The original `mdbl.c` left `.stack`/`.slot`/`.chunk` all at 0 (library
+defaults) — those defaults are what were exhausting during config load.
+Two bad attempts before landing on the fix, both instructive:
+1. `.chunk = 65536, .slot = 32768` (98KB total, `.stack` left at 0) —
+   **the app no longer launched at all**, not even far enough to show
+   "no stop configured." Too large a jump, and/or `.stack` needs to be
+   set explicitly once chunk/slot are non-default (unconfirmed exact
+   mechanism, but empirically true).
+2. `.chunk = 16384` alone (modest, `.slot`/`.stack` still 0) — user
+   reported this "didn't work" (not tested to a clean pass/fail before
+   moving on).
+3. **Working values**, found by researching other real Alloy/Pebble
+   projects rather than guessing further:
+   `.stack = 6144, .slot = 32768, .chunk = 32768` (70KB total). These
+   match another public Alloy/Pebble project
+   (camr0/SimpleRoundWatchFace) that hit the identical crash
+   ("Firmware-managed defaults exhaust the chunk heap") and fixed it with
+   these exact numbers. **Confirmed working on this project's real Pebble
+   Time 2 hardware**: added a new tracked stop and saved config — no
+   crash (previously reproduced the crash every time on this exact
+   repro).
+
+```c
+ModdableCreationRecord cr = {
+    .recordSize = sizeof(cr),
+    .stack = 6144,
+    .slot = 32768,
+    .chunk = 32768,
+#ifdef PBL_DEBUG
+    .flags = kModdableCreationFlagDebug,
+#endif
+};
+moddable_createMachine(&cr);
+```
+
+**Lesson for next time**: when a fix's own first attempt fails in a new,
+worse way (app won't even launch), that's the "3+ fixes failed, question
+the approach" signal arriving early — stop guessing at values and go find
+a real, working reference (another project hitting the same error) rather
+than iterating blindly on hardware. The `mdbl.c` fix above is the
+project's second attempt at this in one session; the first (manifest.json)
+wasted an emulator-validated but real-hardware-inert round trip because
+its point of effect was never verified against the actual build pipeline
+before declaring it fixed.
+
+### Optional chaining (`?.`) is broken on this XS engine (found 2026-08-19)
+
+`item?.type !== "stop"` inside `requestRefresh()` built and installed
+without error, but crashed on real hardware at runtime with `call: not a
+function` inside a `Message`'s `onReadable` handler (the call stack that
+happened to reach the broken line). Reverting to the explicit
+`!item || item.type !== "stop"` form fixed it immediately, with no other
+change. Biome's `useOptionalChain` lint rule will keep suggesting `?.` --
+the fix carries a `biome-ignore` comment; don't "clean it up" back to `?.`.
+No other `?.` usage has been tested on this target; treat any new one as
+unverified until confirmed on real hardware, not just a clean build.
+
 ## Before generating code
 
 1. Check whether `docs/pebble-api-reference.md` already covers the API in

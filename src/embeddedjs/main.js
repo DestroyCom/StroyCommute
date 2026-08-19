@@ -68,11 +68,19 @@ const ALL_MESSAGE_KEYS = [
 	"minutes",
 	"atStop",
 	"cancelled",
+	"lineColor",
+	"lineTextColor",
+	"minutes2",
 ];
 const MESSAGE_KEY_CODES = new Map(
 	ALL_MESSAGE_KEYS.map((key, index) => [key, 10000 + index])
 );
 
+/**
+ * @param {string[]} keys - Subset of ALL_MESSAGE_KEYS, in any order.
+ * @returns {Map<string, number>} keys mapped to their package.json-derived
+ *   codes, for use as a `pebble/message` Message's `keys` option.
+ */
 function messageKeyMap(keys) {
 	return new Map(
 		keys.map((key) => {
@@ -105,6 +113,8 @@ const configMessageKeys = [
 	"lineRef",
 	"lineName",
 	"stopName",
+	"lineColor",
+	"lineTextColor",
 ];
 
 const configMessage = new Message({
@@ -135,9 +145,18 @@ const configMessage = new Message({
 // task-8b-report.md).
 let configResendTimer = null;
 let configResendCount = 0;
-const CONFIG_RESEND_TIMEOUT_MS = 4000;
+// Lowered from 4000ms (2026-08-19): real-device logs show the *first*
+// pkjs "ready" send essentially always fails outright (every item "giving
+// up after 3 retries") because the watch's AppMessage inbox isn't open yet
+// at that exact boot moment -- not a slow-but-eventually-arriving send.
+// The first 4s were pure dead waiting on a send that was never going to
+// succeed; 1500ms is still comfortably above a real single-message
+// round-trip, so a send that's merely slow (rather than doomed) still has
+// room to complete before the timeout fires.
+const CONFIG_RESEND_TIMEOUT_MS = 1500;
 const MAX_CONFIG_RESENDS = 3;
 
+/** Arms the Task 8b config-resend safety net if not already armed. */
 function scheduleConfigResendTimeout() {
 	if (configResendTimer !== null) return; // already scheduled
 	configResendTimer = setTimeout(
@@ -146,6 +165,7 @@ function scheduleConfigResendTimeout() {
 	);
 }
 
+/** Disarms the config-resend safety net, if armed. */
 function clearConfigResendTimeout() {
 	if (configResendTimer !== null) {
 		clearTimeout(configResendTimer);
@@ -153,6 +173,10 @@ function clearConfigResendTimeout() {
 	}
 }
 
+/**
+ * Fires when a config load hasn't completed within CONFIG_RESEND_TIMEOUT_MS;
+ * asks pkjs for a fresh full resend, up to MAX_CONFIG_RESENDS times.
+ */
 function onConfigResendTimeout() {
 	configResendTimer = null;
 	if (configLoaded) return; // resolved itself between scheduling and firing
@@ -188,6 +212,12 @@ function onConfigResendTimeout() {
 	scheduleConfigResendTimeout();
 }
 
+/**
+ * Accumulates one configMeta/configStop/configLine item from pkjs into
+ * pendingStops/pendingLines, committing to stops/alertLines and firing
+ * onConfigReady() once every expected item has arrived.
+ * @param {object} item - Decoded AppMessage item (itemType + fields).
+ */
 function handleConfigItem(item) {
 	if (!configLoaded) scheduleConfigResendTimeout();
 
@@ -206,6 +236,8 @@ function handleConfigItem(item) {
 			lineRef: item.lineRef,
 			lineName: item.lineName,
 			stopName: item.stopName,
+			lineColor: item.lineColor || "#888888",
+			lineTextColor: item.lineTextColor || "#ffffff",
 		});
 	} else if (item.itemType === "configLine") {
 		pendingLines.push({ lineRef: item.lineRef, lineName: item.lineName });
@@ -263,6 +295,7 @@ const departureMessageKeys = [
 	"minutes",
 	"atStop",
 	"cancelled",
+	"minutes2",
 ];
 
 // Same Message instance handles both directions of this protocol (receive
@@ -284,6 +317,7 @@ const departureMessage = new Message({
 			line: item.lineName,
 			destination: item.destination,
 			minutes: item.minutes,
+			minutes2: item.minutes2, // undefined when there's no following departure
 			atStop: !!item.atStop,
 			cancelled: !!item.cancelled,
 		});
@@ -311,6 +345,11 @@ const departureMessage = new Message({
 let refreshTimer = null;
 let refreshQueue = [];
 
+/**
+ * Attempts one `refreshStop` write for `stop`.
+ * @param {{stopRef: string, lineRef: string, lineName: string}} stop
+ * @returns {boolean} True if the write succeeded (outbound slot was free).
+ */
 function tryWriteRefreshStop(stop) {
 	const m = new Map();
 	m.set("itemType", "refreshStop");
@@ -325,6 +364,7 @@ function tryWriteRefreshStop(stop) {
 	}
 }
 
+/** Drains refreshQueue while the single outbound AppMessage slot is free. */
 function flushRefreshQueue() {
 	while (refreshQueue.length > 0) {
 		if (!tryWriteRefreshStop(refreshQueue[0])) break; // wait for onWritable to retry
@@ -332,28 +372,34 @@ function flushRefreshQueue() {
 	}
 }
 
+/**
+ * Queues a refreshStop for the currently-selected stop, if any, then
+ * flushes. A no-op for the "alert" item type (not PRIM data). Scoping to
+ * just the viewed stop, instead of every tracked stop, is deliberate: no
+ * reason to spend PRIM quota / Bluetooth traffic on stops the user isn't
+ * currently looking at.
+ */
 function requestRefresh() {
+	const item = buildItemList()[selectedIndex];
+	// Deliberately not `item?.type` -- confirmed on real hardware that this
+	// XS engine's optional-chaining support is broken here (a runtime "call:
+	// not a function" error in an onReadable handler, immediately after
+	// switching this exact line to `?.`). Do not "simplify" this back.
+	// biome-ignore lint/complexity/useOptionalChain: see comment above
+	if (!item || item.type !== "stop") return;
 	// Merge, don't overwrite: if the previous round hasn't fully drained
 	// (e.g. a Bluetooth stall keeps the single outbound slot busy across a
-	// tick boundary), `refreshQueue = stops.slice()` would silently discard
-	// whatever was still pending and reset every stop to the front of the
-	// queue — starving stops that were already waiting longer in favor of
-	// ones that already got sent last round. Append only stops not already
-	// queued (dedup by stopRef) so pending items keep their place in line.
-	if (refreshQueue.length > 0) {
-		console.log(
-			`requestRefresh: ${refreshQueue.length} refreshStop(s) from the previous round still queued — merging instead of overwriting`
-		);
-	}
-	for (const stop of stops) {
-		const alreadyQueued = refreshQueue.some(
-			(queued) => queued.stopRef === stop.stopRef
-		);
-		if (!alreadyQueued) refreshQueue.push(stop);
-	}
+	// tick boundary), discarding a still-pending entry here would silently
+	// drop it. Dedup by stopRef so re-queuing the same viewed stop every
+	// tick doesn't pile up duplicates.
+	const alreadyQueued = refreshQueue.some(
+		(queued) => queued.stopRef === item.stopRef
+	);
+	if (!alreadyQueued) refreshQueue.push(item);
 	flushRefreshQueue();
 }
 
+/** Starts the 45s foreground departure-refresh timer, once. */
 function startRefreshTimer() {
 	if (refreshTimer) return;
 	refreshTimer = setInterval(requestRefresh, 45000);
@@ -362,11 +408,22 @@ function startRefreshTimer() {
 const previousOnConfigReady = onConfigReady;
 onConfigReady = () => {
 	previousOnConfigReady();
-	requestRefresh();
 	startRefreshTimer();
+	// renderCurrentScreen()/requestRefresh() are declared further down
+	// (hoisted `function`s, so this forward reference resolves fine).
+	// renderCurrentScreen() is required here: nothing else calls it once
+	// config finishes loading (confirmed via real-device logs -- config
+	// loaded fully after one resend cycle, but the screen stayed stuck on
+	// the boot-time "Chargement..." render regardless, since no
+	// departureUpdate or button press had happened yet to trigger a
+	// re-render). requestRefresh() kicks off the fetch for whichever item
+	// selectedIndex points to (item 0 on a fresh boot) immediately, rather
+	// than waiting for the 45s timer's first tick.
+	renderCurrentScreen();
+	requestRefresh();
 };
 
-// --- Piu UI — list screen ---
+// --- Piu UI — single screen ---
 // The first real Piu UI screen this project builds. Replaces the placeholder
 // Poco clock face (raw `render.begin()/fillRectangle/drawText/end()` on
 // `secondchange`, formerly here) entirely rather than running alongside it —
@@ -387,18 +444,23 @@ onConfigReady = () => {
 // (Moddable-OpenSource/pebble-examples, `piu/apps/words`), not guessed.
 
 const whiteSkin = new Skin({ fill: "white" });
-const highlightSkin = new Skin({ fill: "#4444FF" });
 const rowStyle = new Style({ font: "18px Gothic", color: "black" });
-const rowStyleSelected = new Style({ font: "18px Gothic", color: "white" });
 
+/**
+ * @returns {object[]} Flattened, renderable list combining tracked stops
+ *   (type "stop") and alert lines (type "alert"), in that order.
+ */
 function buildItemList() {
 	const items = [];
 	for (const stop of stops) {
 		items.push({
 			type: "stop",
 			stopRef: stop.stopRef,
+			lineRef: stop.lineRef,
 			lineName: stop.lineName,
 			stopName: stop.stopName,
+			lineColor: stop.lineColor,
+			lineTextColor: stop.lineTextColor,
 		});
 	}
 	for (const line of alertLines) {
@@ -411,51 +473,27 @@ function buildItemList() {
 	return items;
 }
 
-function rowLabel(item) {
-	if (item.type === "stop") {
-		const dep = departures.get(item.stopRef);
-		let status = "...";
-		if (dep) {
-			if (dep.state === "ok")
-				status = dep.atStop ? "à quai" : `${dep.minutes} min`;
-			else if (dep.state === "network") status = "erreur réseau";
-			else if (dep.state === "noRealtimeData") status = "pas de temps réel";
-			else if (dep.state === "quotaExceeded") status = "quota dépassé";
-		}
-		return `${item.lineName}  ${item.stopName}  ${status}`;
-	}
-	return `${item.lineName}  alertes (bientôt)`;
-}
-
 let selectedIndex = 0;
-let currentScreenMode = "list"; // "list" | "detail", read/written by Task 10 too
 
 // Hardware buttons in Piu route through a focused container's Behavior
-// (onPressSelect/onPressUp/onPressDown/onPressBack), NOT through a
-// standalone pebble/button Message-style Button instance -- confirmed by
-// reading a real, working multi-screen Piu app
-// (Moddable-OpenSource/pebble-examples, piu/apps/words:
+// (onPressUp/onPressDown), NOT through a standalone pebble/button
+// Message-style Button instance -- confirmed by reading a real, working
+// multi-screen Piu app (Moddable-OpenSource/pebble-examples, piu/apps/words:
 // modules/piuView.js's ViewBehavior). A separate Button({types:["back",...]})
 // (the original Task 9/10 approach) DOES still receive the press (verified
 // on real hardware via temporary logging), but it runs alongside Piu's own
-// native back-handling rather than replacing it, so the OS still exits the
-// app on a single back press regardless of what the Button's callback does
-// -- that's the root cause of "back exits the app instead of returning to
-// the list", not a bug in the press-handling logic itself.
-// onPressBack only returning true (handled, don't exit) from detail mode
-// mirrors the reference's own convention: falling through (no truthy
-// return) when there's nothing to go back to is what lets the OS's normal
-// exit-on-back behavior apply at the list screen (the app's root) --
-// exactly the behavior we want there.
+// native back-handling rather than replacing it, so it can't suppress the
+// OS's default exit-on-back behavior.
+//
+// Single-screen app (2026-08-19): the separate list/detail modes were
+// removed -- the app now always shows buildDetailScreen() for whichever
+// item selectedIndex points to; up/down cycles between tracked stops
+// exactly as it did on the list screen before. No onPressSelect/onPressBack
+// overrides needed any more: Select falls through as a no-op, and Back
+// falls through to the OS's normal exit-on-back, since this is now the
+// app's only screen (nothing to "return" to).
+/** Hardware-button routing for the app's single Application/root Container. */
 class MainBehavior extends Behavior {
-	onPressSelect() {
-		if (currentScreenMode !== "list") return;
-		const items = buildItemList();
-		if (items.length === 0) return;
-		currentScreenMode = "detail";
-		renderCurrentScreen();
-		return true;
-	}
 	onPressUp() {
 		this.step(-1);
 		return true;
@@ -464,18 +502,14 @@ class MainBehavior extends Behavior {
 		this.step(1);
 		return true;
 	}
-	onPressBack() {
-		if (currentScreenMode !== "detail") return; // let the OS exit as usual
-		currentScreenMode = "list";
-		renderCurrentScreen();
-		return true;
-	}
+	/** Moves selectedIndex by `direction`, clamped in range, and re-fetches. */
 	step(direction) {
 		const items = buildItemList();
 		if (items.length === 0) return;
 		const maxIndex = Math.max(0, items.length - 1);
 		selectedIndex = Math.max(0, Math.min(maxIndex, selectedIndex + direction));
 		renderCurrentScreen();
+		requestRefresh(); // fetch immediately for the newly-selected stop
 	}
 }
 
@@ -492,9 +526,37 @@ const application = new Application(null, {
 // simply never fire.
 application.focus();
 
-function buildListScreen() {
+const titleStyle = new Style({ font: "bold 24px Gothic", color: "black" });
+const bodyStyle = new Style({ font: "18px Gothic", color: "black" });
+const errorStyle = new Style({ font: "18px Gothic", color: "#AA0000" });
+
+// Station-board panel (re-attempt, 2026-08-19): a prior attempt at this
+// crashed real hardware (see git history / docs/pebble-alloy/SKILL.md) when
+// the machine's chunk/slot budget was still the ~8-32KB library default.
+// That budget is now fixed properly at the source -- see src/c/mdbl.c's
+// ModdableCreationRecord (.stack=6144 .slot=32768 .chunk=32768) -- so this
+// is a genuinely different starting point, not a retry of the same
+// conditions. The Skin is constructed fresh per render (one per line color)
+// -- the same pattern already proven stable on this target. The Style is
+// cached per distinct text color in a Map, the same pattern that fixed the
+// original badge-text crash.
+const boardTitleStyleCache = new Map();
+/** @param {string} color - Hex text color. @returns {Style} Cached per color. */
+function boardTitleStyle(color) {
+	const key = color || "#ffffff";
+	let style = boardTitleStyleCache.get(key);
+	if (!style) {
+		style = new Style({ font: "bold 18px Gothic", color: key });
+		boardTitleStyleCache.set(key, style);
+	}
+	return style;
+}
+
+/** @returns {Container} The single screen for the item at selectedIndex. */
+function buildDetailScreen() {
 	const items = buildItemList();
-	if (items.length === 0) {
+	const item = items[selectedIndex];
+	if (!item) {
 		return new Container(null, {
 			left: 0,
 			right: 0,
@@ -507,90 +569,65 @@ function buildListScreen() {
 					left: 8,
 					right: 8,
 					style: rowStyle,
-					string: "Aucun arrêt configuré",
+					string: configLoaded ? "Aucun arrêt configuré" : "Chargement...",
 				}),
 			],
 		});
 	}
 
-	const windowStart = Math.max(
-		0,
-		Math.min(selectedIndex - 1, items.length - 3)
-	);
-	const visibleCount = Math.min(3, items.length);
-	const rowContents = [];
-	for (let i = 0; i < visibleCount; i++) {
-		const absoluteIndex = windowStart + i;
-		if (absoluteIndex >= items.length) break;
-		const item = items[absoluteIndex];
-		const selected = absoluteIndex === selectedIndex;
-		rowContents.push(
+	const lines = [];
+	// "Haut/bas pour changer" hint -- only shown when there's actually
+	// something to cycle to, at the bottom of the screen, below every other
+	// element this screen ever renders (board banner, destination, status,
+	// following-departure line all stay well above top:200 on Emery's
+	// 228px-tall display).
+	if (items.length > 1) {
+		lines.push(
+			new Label(null, {
+				top: 200,
+				left: 8,
+				right: 8,
+				style: rowStyle,
+				// Plain ASCII -- the Gothic bitmap font doesn't have glyphs
+				// for ▲▼, confirmed on real hardware (renders as tofu boxes).
+				string: "Haut / Bas pour changer",
+			})
+		);
+	}
+	if (item.type === "stop") {
+		const dep = departures.get(item.stopRef);
+		lines.push(
 			new Container(null, {
 				left: 0,
 				right: 0,
-				top: i * 50,
-				height: 50,
-				skin: selected ? highlightSkin : whiteSkin,
+				top: 0,
+				height: 44,
+				skin: new Skin({ fill: item.lineColor || "#888888" }),
 				contents: [
 					new Label(null, {
 						left: 8,
-						top: 15,
-						style: selected ? rowStyleSelected : rowStyle,
-						string: rowLabel(item),
+						right: 8,
+						top: 0,
+						bottom: 0,
+						style: boardTitleStyle(item.lineTextColor),
+						string: `${item.lineName} — ${item.stopName}`,
 					}),
 				],
 			})
 		);
-	}
-
-	return new Container(null, {
-		left: 0,
-		right: 0,
-		top: 0,
-		bottom: 0,
-		skin: whiteSkin,
-		contents: rowContents,
-	});
-}
-
-const titleStyle = new Style({ font: "bold 24px Gothic", color: "black" });
-const bodyStyle = new Style({ font: "18px Gothic", color: "black" });
-const errorStyle = new Style({ font: "18px Gothic", color: "#AA0000" });
-
-function buildDetailScreen() {
-	const items = buildItemList();
-	const item = items[selectedIndex];
-	if (!item) {
-		return new Container(null, {
-			left: 0,
-			right: 0,
-			top: 0,
-			bottom: 0,
-			skin: whiteSkin,
-			contents: [],
-		});
-	}
-
-	const lines = [];
-	if (item.type === "stop") {
-		const dep = departures.get(item.stopRef);
-		lines.push(
-			new Label(null, {
-				top: 10,
-				left: 8,
-				right: 8,
-				style: titleStyle,
-				string: `${item.lineName} — ${item.stopName}`,
-			})
-		);
 		if (!dep) {
+			// "..." in place of the minutes digit, at the same position the
+			// digit itself lands in below (see the "else" branch's status
+			// Label) -- the destination/direction line is left blank rather
+			// than a separate "loading" message, since it's real PRIM data
+			// (DestinationDisplay) that isn't known yet either.
 			lines.push(
 				new Label(null, {
-					top: 60,
+					top: 110,
 					left: 8,
 					right: 8,
-					style: bodyStyle,
-					string: "Chargement...",
+					style: titleStyle,
+					string: "...",
 				})
 			);
 		} else if (dep.state === "network") {
@@ -630,23 +667,42 @@ function buildDetailScreen() {
 					? "À quai"
 					: `${dep.minutes} min`;
 			lines.push(
-				new Label(null, {
+				// Text (not Label) so a long destination -- "Vers Porte de
+				// Versailles (Parc des Expositions)" -- wraps onto a second
+				// line instead of running off the screen edge. Label is
+				// single-line-only in Piu; Text is the native word-wrap
+				// primitive (PiuText.c).
+				new Text(null, {
 					top: 60,
 					left: 8,
 					right: 8,
+					height: 44,
 					style: bodyStyle,
-					string: dep.destination,
+					string: `Vers ${dep.destination}`,
 				})
 			);
 			lines.push(
 				new Label(null, {
-					top: 100,
+					top: 110,
 					left: 8,
 					right: 8,
 					style: titleStyle,
 					string: status,
 				})
 			);
+			// Following departure (minutes2), same direction/stop -- absent
+			// (undefined) when PRIM only returned one upcoming visit.
+			if (typeof dep.minutes2 === "number") {
+				lines.push(
+					new Label(null, {
+						top: 150,
+						left: 8,
+						right: 8,
+						style: bodyStyle,
+						string: `Puis ${dep.minutes2} min`,
+					})
+				);
+			}
 		}
 	} else {
 		lines.push(
@@ -679,13 +735,25 @@ function buildDetailScreen() {
 	});
 }
 
+/** Rebuilds the Application's content from scratch (single-screen app). */
 function renderCurrentScreen() {
 	application.empty();
-	if (currentScreenMode === "list") {
-		application.add(buildListScreen());
-	} else {
-		application.add(buildDetailScreen()); // Task 10
-	}
+	application.add(buildDetailScreen());
 }
 
 renderCurrentScreen();
+
+// Ask for config immediately at boot, rather than passively waiting on
+// pkjs's own unprompted "ready" push (2026-08-19, real-device evidence):
+// captured logs show that first push essentially always fails outright --
+// every item "giving up after 3 retries" -- because the watch's AppMessage
+// inbox isn't open yet at the exact wall-clock moment pkjs's "ready" fires.
+// It's not a slow send, it's a doomed one, so waiting on it first (even
+// briefly) was pure dead time on every single boot. Calling
+// onConfigResendTimeout() directly here sends a configResendRequest right
+// away (once this module has finished evaluating -- the earliest point the
+// watch's own outbound message channel can realistically be up) instead of
+// scheduling a delayed first attempt; it still arms the same
+// CONFIG_RESEND_TIMEOUT_MS-spaced retries (up to MAX_CONFIG_RESENDS) as a
+// fallback if this first request is itself dropped.
+onConfigResendTimeout();

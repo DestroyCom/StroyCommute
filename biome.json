@@ -24,6 +24,18 @@
 			"preset": "recommended"
 		}
 	},
+	"overrides": [
+		{
+			"includes": ["config/index.html"],
+			"linter": {
+				"rules": {
+					"style": {
+						"useTemplate": "off"
+					}
+				}
+			}
+		}
+	],
 	"assist": {
 		"enabled": true,
 		"actions": {

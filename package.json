@@ -47,7 +47,10 @@
 			"destination",
 			"minutes",
 			"atStop",
-			"cancelled"
+			"cancelled",
+			"lineColor",
+			"lineTextColor",
+			"minutes2"
 		],
 		"resources": {
 			"media": []
