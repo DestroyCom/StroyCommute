@@ -323,7 +323,23 @@ const departureMessage = new Message({
 		if (typeof item.quotaRemaining === "number") {
 			quotaRemaining = item.quotaRemaining;
 		}
-		pendingRefreshStops.delete(item.stopRef);
+		// Data is stored and shown immediately either way -- only the
+		// spinner's disappearance is held back, so a fast PRIM reply doesn't
+		// flash the spinner for a single frame and read as a glitch (see
+		// MIN_REFRESH_INDICATOR_MS above).
+		const startedAt = pendingRefreshStartedAt.get(item.stopRef);
+		const elapsed = startedAt
+			? Date.now() - startedAt
+			: MIN_REFRESH_INDICATOR_MS;
+		const stopRef = item.stopRef;
+		if (elapsed >= MIN_REFRESH_INDICATOR_MS) {
+			clearPendingRefresh(stopRef);
+		} else {
+			setTimeout(() => {
+				clearPendingRefresh(stopRef);
+				renderCurrentScreen();
+			}, MIN_REFRESH_INDICATOR_MS - elapsed);
+		}
 		departures.set(item.stopRef, {
 			state: item.state,
 			line: item.lineName,
@@ -366,6 +382,19 @@ const refreshQueue = [];
 // forever -- the 45s timer will mark it pending again on its own anyway.
 const pendingRefreshStops = new Set();
 const REFRESH_INDICATOR_TIMEOUT_MS = 15000;
+
+// stopRef -> Date.now() when its refresh started -- lets the departureUpdate
+// handler enforce MIN_REFRESH_INDICATOR_MS below even when PRIM replies
+// almost instantly (a fast reply flashing the spinner for one frame reads
+// as a glitch rather than a real refresh).
+const pendingRefreshStartedAt = new Map();
+const MIN_REFRESH_INDICATOR_MS = 1500;
+
+/** Clears both pending-refresh maps for `stopRef` in one place. */
+function clearPendingRefresh(stopRef) {
+	pendingRefreshStops.delete(stopRef);
+	pendingRefreshStartedAt.delete(stopRef);
+}
 
 // Plain-ASCII spinner (not a real icon glyph -- Gothic bitmap font lacks
 // arrow/spinner Unicode characters, same tofu problem already hit with
@@ -438,12 +467,22 @@ function requestRefresh() {
 		(queued) => queued.stopRef === item.stopRef
 	);
 	if (!alreadyQueued) refreshQueue.push(item);
+	// Only stamp the start time on the first queue for this stop -- a
+	// redundant requestRefresh() call (e.g. the 45s timer firing while a
+	// button-triggered refresh is still in flight) must not push the
+	// MIN_REFRESH_INDICATOR_MS floor further out.
+	if (!pendingRefreshStops.has(item.stopRef)) {
+		pendingRefreshStartedAt.set(item.stopRef, Date.now());
+	}
 	pendingRefreshStops.add(item.stopRef);
-	renderCurrentScreen(); // shows the "..." refresh marker immediately
+	renderCurrentScreen(); // shows the spinner marker immediately
 	flushRefreshQueue();
 	const stopRef = item.stopRef;
 	setTimeout(() => {
-		if (pendingRefreshStops.delete(stopRef)) renderCurrentScreen();
+		if (pendingRefreshStops.has(stopRef)) {
+			clearPendingRefresh(stopRef);
+			renderCurrentScreen();
+		}
 	}, REFRESH_INDICATOR_TIMEOUT_MS);
 }
 

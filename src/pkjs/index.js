@@ -969,16 +969,25 @@ function handleRefreshStop(request) {
 			const call = visits[0].MonitoredVehicleJourney.MonitoredCall;
 			const cancelled = call.DepartureStatus === "cancelled";
 			const atStop = call.VehicleAtStop === true;
-			const minutes = atStop ? -1 : callMinutesRemaining(call);
+			const rawMinutes = atStop ? -1 : callMinutesRemaining(call);
 
 			// callMinutesRemaining returns null when PRIM gave this call no
 			// usable time field at all (see its doc comment) -- send the
 			// already-handled "no real-time data" state rather than an "ok"
 			// update missing its "minutes" field (the "undefined min" bug).
-			if (minutes === null) {
+			if (rawMinutes === null) {
 				sendDepartureUpdate(request.stopRef, "noRealtimeData");
 				return;
 			}
+			// Real-hardware evidence: a vehicle's ExpectedArrivalTime can be a
+			// few seconds/minutes in the past by the time this computes (PRIM
+			// polling lag, clock drift) while VehicleAtStop hasn't flipped to
+			// true yet -- rendering as "-1 min" on the watch. Floored at 0
+			// (the watch has no "just arrived" state, 0 is the closest honest
+			// display). Left alone when atStop (-1 there is a sentinel the
+			// watch ignores in favor of the separate atStop field, not a real
+			// minute count).
+			const minutes = atStop ? rawMinutes : Math.max(0, rawMinutes);
 
 			// visits[] for one specific stop_id+line is a real, direction-stable
 			// SIRI stop-monitoring result (a stop_id is one physical
@@ -1000,9 +1009,13 @@ function handleRefreshStop(request) {
 			};
 			if (visits.length > 1) {
 				const call2 = visits[1].MonitoredVehicleJourney.MonitoredCall;
-				const minutes2 =
-					call2.VehicleAtStop === true ? -1 : callMinutesRemaining(call2);
-				if (minutes2 !== null) extra.minutes2 = minutes2;
+				// No atStop sentinel here -- unlike the primary call, the watch
+				// has no separate boolean field for minutes2's at-stop state
+				// and just prints this number as-is, so clamp straight to 0
+				// instead of ever sending -1.
+				const rawMinutes2 =
+					call2.VehicleAtStop === true ? 0 : callMinutesRemaining(call2);
+				if (rawMinutes2 !== null) extra.minutes2 = Math.max(0, rawMinutes2);
 			}
 
 			sendDepartureUpdate(request.stopRef, "ok", extra);
