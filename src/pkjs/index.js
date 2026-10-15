@@ -31,6 +31,11 @@ const CONFIG_HTML = `<!DOCTYPE html>
   .searchResultItem:last-child { border-bottom: none; }
   .searchResultItem:active { background: #26263a; }
   .searchStatus { padding: 8px; font-size: 0.9em; color: #999; }
+  .directionPicker { border: 1px solid #5555ff; border-radius: 6px; padding: 10px; margin-top: 6px; background: #14141c; }
+  .directionPicker label { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+  .directionPicker .pickerButtons { display: flex; gap: 8px; margin-top: 8px; }
+  .rowDirections { display: block; font-size: 0.85em; color: #aaa; margin-top: 2px; }
+  .rowWarning { display: block; font-size: 0.85em; color: #cc4444; margin-top: 2px; }
   .keyStatus { font-size: 0.9em; margin-top: 6px; color: #999; }
   .lineSwatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 6px; vertical-align: middle; }
   .dayRow { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 8px; }
@@ -54,6 +59,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
     <div id="stopsList"></div>
     <input type="text" id="stopSearchInput" placeholder="Rechercher un arrêt (ex: Châtelet)" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceSearch('stop')" disabled>
     <div id="stopSearchResults" class="searchResults"></div>
+    <div id="directionPicker"></div>
   </fieldset>
 
   <fieldset>
@@ -182,6 +188,17 @@ const CONFIG_HTML = `<!DOCTYPE html>
   // project's known-good, already-tested-on-real-hardware PRIM identifiers
   // once re-wrapped in the STIF format.
   //
+  // Exception: SNCF-operated rail stops (RER, Transilien) aren't exposed
+  // per platform in this dataset but per stop area, with ids shaped like
+  // "IDFM:monomodalStopPlace:43135" (documented by IDFM: RER/Transilien
+  // stops are "zones d'arrêt", every other mode uses "arrêts de
+  // référence"). PRIM wants those as "STIF:StopArea:SP:43135:" -- which is
+  // also what PRIM's own docs recommend for SNCF stops anyway, since SNCF
+  // only feeds a fictitious platform standing for the whole station.
+  // Taking parts[1] blindly here used to produce
+  // "STIF:StopPoint:Q:monomodalStopPlace:", which PRIM rejects -- every RER
+  // stop showed "Erreur réseau" on the watch.
+  //
   // NOTE: no template literals (backtick strings) anywhere in this file,
   // by necessity, not style -- this HTML is embedded verbatim inside a JS
   // template literal in src/pkjs/index.js (CONFIG_HTML); a literal
@@ -193,8 +210,40 @@ const CONFIG_HTML = `<!DOCTYPE html>
    * @returns {string} The equivalent PRIM SIRI ref, e.g. "STIF:Line::C01374:".
    */
   function idfmIdToStif(rawId, kind) {
-    var suffix = rawId.split(":")[1] || "";
-    return kind === "line" ? "STIF:Line::" + suffix + ":" : "STIF:StopPoint:Q:" + suffix + ":";
+    var parts = rawId.split(":");
+    var suffix = parts[parts.length - 1] || "";
+    if (kind === "line") return "STIF:Line::" + suffix + ":";
+    if (parts[1] === "monomodalStopPlace") return "STIF:StopArea:SP:" + suffix + ":";
+    return "STIF:StopPoint:Q:" + suffix + ":";
+  }
+
+  /**
+   * @param {string} stopRef - PRIM SIRI stop ref.
+   * @returns {boolean} True for a stop area (both directions mixed in one
+   *   PRIM reply), false for a single platform/direction.
+   */
+  function isStopArea(stopRef) {
+    return stopRef.indexOf("STIF:StopArea:") === 0;
+  }
+
+  // Configs saved before the monomodalStopPlace fix above carry this
+  // unrecoverable ref (the numeric id was dropped at conversion time).
+  /** @param {string} stopRef */
+  function isBrokenStopRef(stopRef) {
+    return /:monomodalStopPlace:$/.test(stopRef);
+  }
+
+  /**
+   * @param {object} journey - A SIRI MonitoredVehicleJourney.
+   * @returns {string} Best available destination label, "" if none.
+   */
+  function journeyDestinationName(journey) {
+    var candidates = [journey.MonitoredCall && journey.MonitoredCall.DestinationDisplay, journey.DestinationName, journey.DirectionName];
+    for (let i = 0; i < candidates.length; i++) {
+      const list = candidates[i];
+      if (list && list[0] && list[0].value) return list[0].value;
+    }
+    return "";
   }
 
   /**
@@ -314,10 +363,109 @@ const CONFIG_HTML = `<!DOCTYPE html>
         var delivery = data && data.Siri && data.Siri.ServiceDelivery.StopMonitoringDelivery[0];
         var visits = delivery && delivery.MonitoredStopVisit;
         if (!visits || visits.length === 0) return null;
-        var dest = visits[0].MonitoredVehicleJourney.MonitoredCall.DestinationDisplay;
-        return dest && dest[0] ? dest[0].value : null;
+        return journeyDestinationName(visits[0].MonitoredVehicleJourney) || null;
       })
       .catch(() => null);
+  }
+
+  // A stop area (RER/Transilien) returns every train of the line at that
+  // station, both directions mixed -- so the user picks which terminus(es)
+  // they care about. Built from whatever PRIM currently announces there
+  // (typically the next hour or so): a terminus with no train announced
+  // right now won't be listed, the row can be re-added later to change it.
+  /**
+   * @param {string} apiKey
+   * @param {string} stopRef - PRIM SIRI stop area ref.
+   * @param {string} lineRef - PRIM SIRI line ref.
+   * @returns {Promise<{ref: string, name: string}[]|null>} Distinct
+   *   destinations, or null on failure (quota, network, bad key).
+   */
+  function fetchDestinations(apiKey, stopRef, lineRef) {
+    var url = STOP_MONITORING_API + "?MonitoringRef=" + encodeURIComponent(stopRef) + "&LineRef=" + encodeURIComponent(lineRef);
+    return fetch(url, { headers: { apiKey: apiKey } })
+      .then((res) => (res.status === 200 ? res.json() : null))
+      .then((data) => {
+        if (!data) return null;
+        var delivery = data.Siri && data.Siri.ServiceDelivery.StopMonitoringDelivery[0];
+        var visits = (delivery && delivery.MonitoredStopVisit) || [];
+        var seen = {};
+        var destinations = [];
+        visits.forEach((visit) => {
+          var journey = visit.MonitoredVehicleJourney;
+          var name = journeyDestinationName(journey);
+          var ref = (journey.DestinationRef && journey.DestinationRef.value) || "";
+          var key = ref || name;
+          if (!key || seen[key]) return;
+          seen[key] = true;
+          destinations.push({ ref: ref, name: name || ref });
+        });
+        return destinations.sort((a, b) => a.name.localeCompare(b.name));
+      })
+      .catch(() => null);
+  }
+
+  /**
+   * Shows the terminus picker for a stop area result, then adds the row.
+   * @param {object} values - Same shape as addStopRow's argument.
+   */
+  function openDirectionPicker(values) {
+    var pickerEl = document.getElementById("directionPicker");
+    pickerEl.innerHTML = '<div class="directionPicker"><div class="searchStatus">Chargement des directions...</div></div>';
+    fetchDestinations(document.getElementById("apiKey").value.trim(), values.stopRef, values.lineRef).then((destinations) => {
+      var box = document.createElement("div");
+      box.className = "directionPicker";
+      var title = document.createElement("div");
+      title.textContent = values.lineName + " — " + values.stopName + " : quelle(s) direction(s) ?";
+      box.appendChild(title);
+      if (!destinations || destinations.length === 0) {
+        const info = document.createElement("div");
+        info.className = "searchStatus";
+        info.textContent = destinations ? "Aucun train annoncé en ce moment -- toutes directions." : "Directions indisponibles (quota/réseau) -- toutes directions.";
+        box.appendChild(info);
+      } else {
+        destinations.forEach((d) => {
+          var label = document.createElement("label");
+          var check = document.createElement("input");
+          check.type = "checkbox";
+          check.className = "destinationBox";
+          check.dataset.ref = d.ref;
+          check.dataset.name = d.name;
+          label.appendChild(check);
+          label.appendChild(document.createTextNode(d.name));
+          box.appendChild(label);
+        });
+        const hint = document.createElement("div");
+        hint.className = "searchStatus";
+        hint.textContent = "Rien de coché = toutes directions.";
+        box.appendChild(hint);
+      }
+      var buttons = document.createElement("div");
+      buttons.className = "pickerButtons";
+      var addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.textContent = "Ajouter";
+      addBtn.onclick = () => {
+        var chosen = [];
+        box.querySelectorAll(".destinationBox").forEach((check) => {
+          if (check.checked) chosen.push({ ref: check.dataset.ref, name: check.dataset.name });
+        });
+        values.destinations = chosen;
+        addStopRow(values);
+        pickerEl.innerHTML = "";
+      };
+      var cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "remove";
+      cancelBtn.textContent = "Annuler";
+      cancelBtn.onclick = () => {
+        pickerEl.innerHTML = "";
+      };
+      buttons.appendChild(addBtn);
+      buttons.appendChild(cancelBtn);
+      box.appendChild(buttons);
+      pickerEl.innerHTML = "";
+      pickerEl.appendChild(box);
+    });
   }
 
   // Debounced so a live search fires roughly once per pause in typing, not
@@ -406,7 +554,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
         ? r.stop_name + " — ligne " + r.route_long_name + " (" + r.mode + ", " + r.nom_commune + ")"
         : "Ligne " + r.route_long_name + " (" + r.mode + ", " + r.operatorname + ")";
       div.textContent = baseLabel;
-      if (kind === "stop" && groups[r.stop_name + "|" + r.id] > 1) {
+      if (kind === "stop" && groups[r.stop_name + "|" + r.id] > 1 && !isStopArea(idfmIdToStif(r.stop_id, "stop"))) {
         div.textContent = baseLabel + " …";
         // A failed lookup (quota, network) must not silently fall back to
         // the plain, still-ambiguous baseLabel -- that leaves two
@@ -418,14 +566,23 @@ const CONFIG_HTML = `<!DOCTYPE html>
       }
       div.onclick = () => {
         if (kind === "stop") {
-          addStopRow({
+          const values = {
             stopRef: idfmIdToStif(r.stop_id, "stop"),
             stopName: r.stop_name,
             lineRef: idfmIdToStif(r.id, "line"),
             lineName: r.route_long_name,
             lineColor: lineStyleFor(r.id).color,
             lineTextColor: lineStyleFor(r.id).textColor
-          });
+          };
+          // The watch keys departures by stopRef+lineRef, so a duplicate
+          // row would just show the same board twice.
+          if (findStopRow(values.stopRef, values.lineRef)) {
+            alert("Cet arrêt est déjà suivi pour cette ligne (supprime-le d'abord pour changer de direction).");
+          } else if (isStopArea(values.stopRef)) {
+            openDirectionPicker(values);
+          } else {
+            addStopRow(values);
+          }
         } else {
           addLineRow({
             lineRef: idfmIdToStif(r.id, "line"),
@@ -444,8 +601,22 @@ const CONFIG_HTML = `<!DOCTYPE html>
   // what makes a malformed/misspelled stopRef/lineRef structurally
   // impossible instead of merely validated after the fact.
   /**
+   * @param {string} stopRef
+   * @param {string} lineRef
+   * @returns {Element|null} The existing .stopRow for this stop+line, if any.
+   */
+  function findStopRow(stopRef, lineRef) {
+    var rows = document.querySelectorAll(".stopRow");
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].dataset.stopRef === stopRef && rows[i].dataset.lineRef === lineRef) return rows[i];
+    }
+    return null;
+  }
+
+  /**
    * @param {{stopRef: string, stopName: string, lineRef: string,
-   *   lineName: string, lineColor?: string, lineTextColor?: string}} values
+   *   lineName: string, lineColor?: string, lineTextColor?: string,
+   *   destinations?: {ref: string, name: string}[]}} values
    */
   function addStopRow(values) {
     var div = document.createElement("div");
@@ -456,9 +627,18 @@ const CONFIG_HTML = `<!DOCTYPE html>
     div.dataset.lineName = values.lineName;
     div.dataset.lineColor = values.lineColor || "#888888";
     div.dataset.lineTextColor = values.lineTextColor || "#ffffff";
+    var destinations = values.destinations || [];
+    div.dataset.destinations = JSON.stringify(destinations);
+    var detail = "";
+    if (isBrokenStopRef(values.stopRef)) {
+      detail = '<span class="rowWarning">Arrêt invalide (ancienne version) -- supprime-le et ré-ajoute-le</span>';
+    } else if (isStopArea(values.stopRef)) {
+      const names = destinations.map((d) => d.name).join(", ");
+      detail = '<span class="rowDirections">→ ' + escapeHtml(names || "toutes directions") + '</span>';
+    }
     div.innerHTML =
       '<span class="rowLabel"><span class="lineSwatch" style="background:' + escapeHtml(div.dataset.lineColor) + '"></span>' +
-      escapeHtml(values.lineName + " — " + values.stopName) + '</span>' +
+      escapeHtml(values.lineName + " — " + values.stopName) + detail + '</span>' +
       '<button type="button" class="remove" onclick="this.parentElement.remove(); updateCount();">x</button>';
     document.getElementById("stopsList").appendChild(div);
     updateCount();
@@ -495,7 +675,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
         lineRef: row.dataset.lineRef,
         lineName: row.dataset.lineName,
         lineColor: row.dataset.lineColor,
-        lineTextColor: row.dataset.lineTextColor
+        lineTextColor: row.dataset.lineTextColor,
+        destinations: JSON.parse(row.dataset.destinations || "[]")
       });
     });
     return result;
@@ -559,7 +740,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
     document.getElementById("apiKey").value = initial.apiKey || "";
     if (initial.apiKey) validateApiKey(initial.apiKey);
     (initial.trackedStops || []).forEach((s) => {
-      addStopRow({ stopRef: s.stopRef, stopName: s.stopName, lineRef: s.lineRef, lineName: s.lineName, lineColor: s.lineColor, lineTextColor: s.lineTextColor });
+      addStopRow({ stopRef: s.stopRef, stopName: s.stopName, lineRef: s.lineRef, lineName: s.lineName, lineColor: s.lineColor, lineTextColor: s.lineTextColor, destinations: s.destinations });
     });
     (initial.trackedLines || []).forEach((l) => {
       addLineRow({ lineRef: l.lineRef, lineName: l.lineName });
@@ -904,15 +1085,14 @@ function recordPrimRequestAndGetQuotaRemaining() {
 }
 
 /**
- * Fabricates a plausible "ok" departureUpdate for `stopRef`, for UI
+ * Fabricates a plausible "ok" departureUpdate for `request`, for UI
  * iteration when PRIM's quota is exhausted. See DEV_FAKE_DEPARTURES.
- * @param {string} stopRef
- * @param {string} lineName
+ * @param {{stopRef: string, lineRef: string, lineName: string}} request
  */
-function sendFakeDepartureUpdate(stopRef, lineName) {
+function sendFakeDepartureUpdate(request) {
 	const minutes = 1 + Math.floor(Math.random() * 15);
-	sendDepartureUpdate(stopRef, "ok", {
-		lineName: lineName,
+	sendDepartureUpdate(request.stopRef, request.lineRef, "ok", {
+		lineName: request.lineName,
 		destination: "Terminus (donnée factice)",
 		minutes: minutes,
 		minutes2: minutes + 3 + Math.floor(Math.random() * 10),
@@ -922,14 +1102,76 @@ function sendFakeDepartureUpdate(stopRef, lineName) {
 }
 
 /**
+ * @param {object} journey - A SIRI MonitoredVehicleJourney.
+ * @returns {string} Best available destination label, "" if none. SNCF
+ *   (RER/Transilien) journeys don't always carry DestinationDisplay, and an
+ *   empty array there used to throw inside the parse below -- surfacing as
+ *   a bogus "network" error.
+ */
+function journeyDestinationName(journey) {
+	// biome-ignore lint/complexity/useOptionalChain: no `?.` in pkjs -- the SDK's webpack 1 bundler predates ES2020 syntax
+	const candidates = [
+		(journey.MonitoredCall || {}).DestinationDisplay,
+		journey.DestinationName,
+		journey.DirectionName,
+	];
+	for (const list of candidates) {
+		const first = (list || [])[0] || {};
+		if (first.value) return first.value;
+	}
+	return "";
+}
+
+/**
+ * @param {string} stopRef
+ * @param {string} lineRef
+ * @returns {{ref: string, name: string}[]} Destinations the user picked
+ *   for this stop+line in the config page; empty means "all directions".
+ */
+function configuredDestinations(stopRef, lineRef) {
+	const stored = localStorage.getItem("stroycommuteConfig");
+	const config = stored ? JSON.parse(stored) : null;
+	const stops = config ? config.trackedStops : [];
+	const stop = stops.find(
+		(s) => s.stopRef === stopRef && s.lineRef === lineRef
+	);
+	return stop ? stop.destinations || [] : [];
+}
+
+/**
+ * @param {object} journey - A SIRI MonitoredVehicleJourney.
+ * @param {{ref: string, name: string}[]} destinations
+ * @returns {boolean} True when `journey` heads to one of `destinations`
+ *   (always true for an empty list). Matches on DestinationRef first --
+ *   stable across label changes -- and falls back to the label.
+ */
+function journeyMatchesDestinations(journey, destinations) {
+	if (destinations.length === 0) return true;
+	const ref = journey.DestinationRef ? journey.DestinationRef.value : "";
+	const name = journeyDestinationName(journey);
+	return destinations.some((d) => (d.ref ? d.ref === ref : d.name === name));
+}
+
+/**
  * Handles a watch-sent `refreshStop` request: fetches live PRIM data for
  * one stop+line and replies with a `departureUpdate` AppMessage (or a fake
  * one, see DEV_FAKE_DEPARTURES).
  * @param {{stopRef: string, lineRef: string, lineName: string}} request
  */
 function handleRefreshStop(request) {
+	const reply = (state, extra) =>
+		sendDepartureUpdate(request.stopRef, request.lineRef, state, extra);
+
 	if (DEV_FAKE_DEPARTURES) {
-		sendFakeDepartureUpdate(request.stopRef, request.lineName);
+		sendFakeDepartureUpdate(request);
+		return;
+	}
+
+	// Configs saved before the monomodalStopPlace fix (see idfmIdToStif in
+	// CONFIG_HTML) carry a ref with no numeric id left in it -- no point
+	// spending quota on a request PRIM can only reject.
+	if (/:monomodalStopPlace:$/.test(request.stopRef)) {
+		reply("invalidStop");
 		return;
 	}
 
@@ -948,101 +1190,116 @@ function handleRefreshStop(request) {
 	xhr.setRequestHeader("apiKey", apiKey);
 	xhr.onload = () => {
 		if (xhr.status === 429) {
-			sendDepartureUpdate(request.stopRef, "quotaExceeded");
+			reply("quotaExceeded");
+			return;
+		}
+		if (xhr.status === 401 || xhr.status === 403) {
+			reply("invalidKey");
+			return;
+		}
+		if (xhr.status === 400 || xhr.status === 404) {
+			console.log(`stop-monitoring ${xhr.status} for ${request.stopRef}`);
+			reply("invalidStop");
 			return;
 		}
 		if (xhr.status < 200 || xhr.status >= 300) {
-			sendDepartureUpdate(request.stopRef, "network");
+			reply("network");
 			return;
 		}
 
 		try {
 			const json = JSON.parse(xhr.responseText);
 			const visits =
-				json.Siri.ServiceDelivery.StopMonitoringDelivery[0].MonitoredStopVisit;
+				json.Siri.ServiceDelivery.StopMonitoringDelivery[0]
+					.MonitoredStopVisit || [];
+			const destinations = configuredDestinations(
+				request.stopRef,
+				request.lineRef
+			);
 
-			if (!visits || visits.length === 0) {
-				sendDepartureUpdate(request.stopRef, "noRealtimeData");
+			// A stop area (RER/Transilien, see isStopArea in CONFIG_HTML)
+			// mixes both directions and isn't guaranteed to come back in time
+			// order, so filter on the user's chosen destinations and sort
+			// explicitly. Harmless for a single platform, already one
+			// direction. Visits with no usable time field are dropped here
+			// (see callMinutesRemaining's doc comment, the "undefined min"
+			// bug) rather than sent as a broken "ok". `rank` puts a vehicle
+			// at the platform first.
+			const departures = visits
+				.map((visit) => visit.MonitoredVehicleJourney)
+				.filter((journey) => journeyMatchesDestinations(journey, destinations))
+				.map((journey) => {
+					const call = journey.MonitoredCall;
+					const atStop = call.VehicleAtStop === true;
+					const minutes = callMinutesRemaining(call);
+					return {
+						journey: journey,
+						atStop: atStop,
+						cancelled: call.DepartureStatus === "cancelled",
+						// Real-hardware evidence: ExpectedArrivalTime can be a
+						// little in the past while VehicleAtStop hasn't flipped
+						// yet (PRIM polling lag, clock drift) -- floored at 0
+						// instead of rendering "-1 min".
+						minutes: minutes === null ? null : Math.max(0, minutes),
+						rank: atStop ? -1 : minutes,
+					};
+				})
+				.filter((d) => d.atStop || d.minutes !== null)
+				.sort((a, b) => a.rank - b.rank);
+
+			if (departures.length === 0) {
+				reply("noRealtimeData");
 				return;
 			}
 
-			const call = visits[0].MonitoredVehicleJourney.MonitoredCall;
-			const cancelled = call.DepartureStatus === "cancelled";
-			const atStop = call.VehicleAtStop === true;
-			const rawMinutes = atStop ? -1 : callMinutesRemaining(call);
-
-			// callMinutesRemaining returns null when PRIM gave this call no
-			// usable time field at all (see its doc comment) -- send the
-			// already-handled "no real-time data" state rather than an "ok"
-			// update missing its "minutes" field (the "undefined min" bug).
-			if (rawMinutes === null) {
-				sendDepartureUpdate(request.stopRef, "noRealtimeData");
-				return;
-			}
-			// Real-hardware evidence: a vehicle's ExpectedArrivalTime can be a
-			// few seconds/minutes in the past by the time this computes (PRIM
-			// polling lag, clock drift) while VehicleAtStop hasn't flipped to
-			// true yet -- rendering as "-1 min" on the watch. Floored at 0
-			// (the watch has no "just arrived" state, 0 is the closest honest
-			// display). Left alone when atStop (-1 there is a sentinel the
-			// watch ignores in favor of the separate atStop field, not a real
-			// minute count).
-			const minutes = atStop ? rawMinutes : Math.max(0, rawMinutes);
-
-			// visits[] for one specific stop_id+line is a real, direction-stable
-			// SIRI stop-monitoring result (a stop_id is one physical
-			// platform/direction, see idfmIdToStif in CONFIG_HTML) -- so a
-			// second entry is genuinely the following vehicle on the same
-			// route+direction, not a different branch. Only sent when PRIM
-			// actually returned one (small stops sometimes don't) AND it has a
-			// usable time field -- omitted, not sent as null/NaN, when it
-			// doesn't (the watch already treats a missing minutes2 as "no
-			// following departure known").
+			const first = departures[0];
 			const extra = {
 				lineName: request.lineName,
-				destination: call.DestinationDisplay
-					? call.DestinationDisplay[0].value
-					: "",
-				minutes: minutes,
-				atStop: atStop,
-				cancelled: cancelled,
+				destination: journeyDestinationName(first.journey),
+				// -1 when atStop is a sentinel the watch ignores in favor of
+				// the separate atStop field, not a real minute count.
+				minutes: first.atStop ? -1 : first.minutes,
+				atStop: first.atStop,
+				cancelled: first.cancelled,
 			};
-			if (visits.length > 1) {
-				const call2 = visits[1].MonitoredVehicleJourney.MonitoredCall;
-				// No atStop sentinel here -- unlike the primary call, the watch
-				// has no separate boolean field for minutes2's at-stop state
-				// and just prints this number as-is, so clamp straight to 0
-				// instead of ever sending -1.
-				const rawMinutes2 =
-					call2.VehicleAtStop === true ? 0 : callMinutesRemaining(call2);
-				if (rawMinutes2 !== null) extra.minutes2 = Math.max(0, rawMinutes2);
+			// The watch has no at-stop flag for the following departure and
+			// prints minutes2 as-is, hence 0 rather than the -1 sentinel.
+			// Omitted (not null/NaN) when there's no following departure.
+			if (departures.length > 1) {
+				const second = departures[1];
+				extra.minutes2 = second.atStop ? 0 : second.minutes;
 			}
 
-			sendDepartureUpdate(request.stopRef, "ok", extra);
+			reply("ok", extra);
 		} catch (error) {
 			console.log("departureUpdate parse error: " + error);
-			sendDepartureUpdate(request.stopRef, "network");
+			reply("network");
 		}
 	};
 	xhr.onerror = () => {
-		sendDepartureUpdate(request.stopRef, "network");
+		reply("network");
 	};
 	lastQuotaRemaining = recordPrimRequestAndGetQuotaRemaining();
 	xhr.send();
 }
 
 /**
- * Sends a `departureUpdate` AppMessage to the watch for one stop.
+ * Sends a `departureUpdate` AppMessage to the watch for one stop+line.
+ * lineRef is echoed back because the watch keys departures by
+ * stopRef+lineRef: a stop area (RER/Transilien) is shared by every line
+ * calling there, e.g. RER A and B at Châtelet-Les Halles.
  * @param {string} stopRef
- * @param {"ok"|"network"|"noRealtimeData"|"quotaExceeded"} state
+ * @param {string} lineRef
+ * @param {"ok"|"network"|"noRealtimeData"|"quotaExceeded"|"invalidKey"|"invalidStop"} state
  * @param {object} [extra] - Extra fields (lineName, destination, minutes,
  *   minutes2, atStop, cancelled) merged in when `state` is "ok".
  */
-function sendDepartureUpdate(stopRef, state, extra) {
+function sendDepartureUpdate(stopRef, lineRef, state, extra) {
 	const payload = Object.assign(
 		{
 			itemType: "departureUpdate",
 			stopRef: stopRef,
+			lineRef: lineRef,
 			state: state,
 		},
 		extra || {}

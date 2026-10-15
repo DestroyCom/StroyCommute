@@ -41,6 +41,21 @@ representing the whole station.
 To find exact stop IDs: "Référentiel des arrêts" dataset on the IDFM data
 portal (`arrets.xls` file / equivalent dataset).
 
+**Open-data → PRIM id mapping** (what the config page's search returns,
+`arrets-lignes` dataset):
+
+- Metro/tram/bus stops are reference stops: `IDFM:<ArRId>` →
+  `STIF:StopPoint:Q:<ArRId>:` (one platform = one direction).
+- RER/Transilien (SNCF) stops are stop areas:
+  `IDFM:monomodalStopPlace:<ZdAId>` → `STIF:StopArea:SP:<ZdAId>:`. A stop
+  area returns **both directions mixed**, not necessarily in time order —
+  pkjs sorts the visits and filters them on the destinations the user
+  picked in the config page (`trackedStops[].destinations`, matched on
+  `DestinationRef.value`, falling back to the destination label).
+- SNCF journeys don't always fill `MonitoredCall.DestinationDisplay` (can be
+  missing or empty): fall back to `MonitoredVehicleJourney.DestinationName`
+  then `DirectionName`.
+
 ## Response structure (real example)
 
 Query: `stop-monitoring?MonitoringRef=STIF:StopPoint:Q:463158:`

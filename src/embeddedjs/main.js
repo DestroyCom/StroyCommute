@@ -286,6 +286,17 @@ function handleConfigItem(item) {
 
 const departures = new Map();
 
+/**
+ * Key for `departures` and the pending-refresh maps. stopRef alone isn't
+ * unique: a stop area (RER/Transilien, `STIF:StopArea:SP:...`) is shared by
+ * every line calling there, e.g. RER A and B at Châtelet-Les Halles.
+ * @param {{stopRef: string, lineRef: string}} item
+ * @returns {string}
+ */
+function departureKey(item) {
+	return `${item.stopRef}|${item.lineRef}`;
+}
+
 // Latest known PRIM quota remaining, shown on the settings screen. Global
 // (not per-stop) -- pkjs attaches it to every departureUpdate it sends
 // (see sendDepartureUpdate in src/pkjs/index.js), so this just tracks
@@ -327,20 +338,20 @@ const departureMessage = new Message({
 		// spinner's disappearance is held back, so a fast PRIM reply doesn't
 		// flash the spinner for a single frame and read as a glitch (see
 		// MIN_REFRESH_INDICATOR_MS above).
-		const startedAt = pendingRefreshStartedAt.get(item.stopRef);
+		const key = departureKey(item);
+		const startedAt = pendingRefreshStartedAt.get(key);
 		const elapsed = startedAt
 			? Date.now() - startedAt
 			: MIN_REFRESH_INDICATOR_MS;
-		const stopRef = item.stopRef;
 		if (elapsed >= MIN_REFRESH_INDICATOR_MS) {
-			clearPendingRefresh(stopRef);
+			clearPendingRefresh(key);
 		} else {
 			setTimeout(() => {
-				clearPendingRefresh(stopRef);
+				clearPendingRefresh(key);
 				renderCurrentScreen();
 			}, MIN_REFRESH_INDICATOR_MS - elapsed);
 		}
-		departures.set(item.stopRef, {
+		departures.set(key, {
 			state: item.state,
 			line: item.lineName,
 			destination: item.destination,
@@ -373,7 +384,7 @@ const departureMessage = new Message({
 let refreshTimer = null;
 const refreshQueue = [];
 
-// stopRefs with a refreshStop request in flight -- drives the spinner
+// departureKey()s with a refreshStop request in flight -- drives the spinner
 // marker appended to the status line in buildDetailScreen. Cleared on the
 // matching departureUpdate; also auto-cleared after
 // REFRESH_INDICATOR_TIMEOUT_MS so a dropped reply (this project has hit
@@ -383,17 +394,17 @@ const refreshQueue = [];
 const pendingRefreshStops = new Set();
 const REFRESH_INDICATOR_TIMEOUT_MS = 15000;
 
-// stopRef -> Date.now() when its refresh started -- lets the departureUpdate
+// departureKey() -> Date.now() when its refresh started -- lets the departureUpdate
 // handler enforce MIN_REFRESH_INDICATOR_MS below even when PRIM replies
 // almost instantly (a fast reply flashing the spinner for one frame reads
 // as a glitch rather than a real refresh).
 const pendingRefreshStartedAt = new Map();
 const MIN_REFRESH_INDICATOR_MS = 1500;
 
-/** Clears both pending-refresh maps for `stopRef` in one place. */
-function clearPendingRefresh(stopRef) {
-	pendingRefreshStops.delete(stopRef);
-	pendingRefreshStartedAt.delete(stopRef);
+/** Clears both pending-refresh maps for `key` (a departureKey()) in one place. */
+function clearPendingRefresh(key) {
+	pendingRefreshStops.delete(key);
+	pendingRefreshStartedAt.delete(key);
 }
 
 // Plain-ASCII spinner (not a real icon glyph -- Gothic bitmap font lacks
@@ -461,26 +472,26 @@ function requestRefresh() {
 	// Merge, don't overwrite: if the previous round hasn't fully drained
 	// (e.g. a Bluetooth stall keeps the single outbound slot busy across a
 	// tick boundary), discarding a still-pending entry here would silently
-	// drop it. Dedup by stopRef so re-queuing the same viewed stop every
-	// tick doesn't pile up duplicates.
+	// drop it. Dedup by departureKey so re-queuing the same viewed stop
+	// every tick doesn't pile up duplicates.
+	const key = departureKey(item);
 	const alreadyQueued = refreshQueue.some(
-		(queued) => queued.stopRef === item.stopRef
+		(queued) => departureKey(queued) === key
 	);
 	if (!alreadyQueued) refreshQueue.push(item);
 	// Only stamp the start time on the first queue for this stop -- a
 	// redundant requestRefresh() call (e.g. the 45s timer firing while a
 	// button-triggered refresh is still in flight) must not push the
 	// MIN_REFRESH_INDICATOR_MS floor further out.
-	if (!pendingRefreshStops.has(item.stopRef)) {
-		pendingRefreshStartedAt.set(item.stopRef, Date.now());
+	if (!pendingRefreshStops.has(key)) {
+		pendingRefreshStartedAt.set(key, Date.now());
 	}
-	pendingRefreshStops.add(item.stopRef);
+	pendingRefreshStops.add(key);
 	renderCurrentScreen(); // shows the spinner marker immediately
 	flushRefreshQueue();
-	const stopRef = item.stopRef;
 	setTimeout(() => {
-		if (pendingRefreshStops.has(stopRef)) {
-			clearPendingRefresh(stopRef);
+		if (pendingRefreshStops.has(key)) {
+			clearPendingRefresh(key);
 			renderCurrentScreen();
 		}
 	}, REFRESH_INDICATOR_TIMEOUT_MS);
@@ -715,7 +726,7 @@ function buildDetailScreen() {
 		);
 	}
 	if (item.type === "stop") {
-		const dep = departures.get(item.stopRef);
+		const dep = departures.get(departureKey(item));
 		lines.push(
 			new Container(null, {
 				left: 0,
@@ -780,6 +791,29 @@ function buildDetailScreen() {
 					string: "Quota API dépassé",
 				})
 			);
+		} else if (dep.state === "invalidKey") {
+			lines.push(
+				new Label(null, {
+					top: 60,
+					left: 8,
+					right: 8,
+					style: errorStyle,
+					string: "Clé API invalide",
+				})
+			);
+		} else if (dep.state === "invalidStop") {
+			// Text (not Label) so it wraps, same reason as the destination
+			// line below.
+			lines.push(
+				new Text(null, {
+					top: 60,
+					left: 8,
+					right: 8,
+					height: 44,
+					style: errorStyle,
+					string: "Arrêt invalide, ré-ajoute-le dans les réglages",
+				})
+			);
 		} else {
 			const status = dep.cancelled
 				? "Supprimé"
@@ -791,7 +825,7 @@ function buildDetailScreen() {
 			// replied yet. Appended to the already-rendered status rather than
 			// a separate element, to avoid disturbing this screen's tight
 			// vertical layout (see the top: offsets throughout this function).
-			const statusWithMarker = pendingRefreshStops.has(item.stopRef)
+			const statusWithMarker = pendingRefreshStops.has(departureKey(item))
 				? `${status} ${SPINNER_FRAMES[spinnerFrame]}`
 				: status;
 			lines.push(

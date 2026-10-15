@@ -92,8 +92,10 @@ AppMessage now carries traffic in both directions:
   embeddedjs's timer — `{itemType: "refreshStop", stopRef, lineRef,
   lineName}`.
 - **phone→watch (`departureUpdate`)**: pkjs's reply to each `refreshStop`
-  — `{itemType: "departureUpdate", stopRef, state, lineName, destination,
-  minutes, atStop, cancelled, quotaRemaining}`. `quotaRemaining` is a local
+  — `{itemType: "departureUpdate", stopRef, lineRef, state, lineName,
+  destination, minutes, minutes2, atStop, cancelled, quotaRemaining}`.
+  The watch keys departures by `stopRef|lineRef` (a RER stop area is
+  shared by several lines). `quotaRemaining` is a local
   count of requests this app has made today against the documented daily
   quota (not a true server-side count -- PRIM exposes no such endpoint),
   attached to every reply regardless of `state` and shown on the watch's
@@ -125,6 +127,10 @@ pkjs has full `Intl`/`Date` support (embeddedjs doesn't).
   error state rather than a blank or stale screen with no indication.
 - A stop with no real-time data available (partial network coverage, per
   PRIM docs) → `state: "noRealtimeData"`, distinct from `"network"`.
+- HTTP 401/403 → `state: "invalidKey"`; HTTP 400/404 (or a stopRef saved
+  by the old, broken RER id conversion) → `state: "invalidStop"`. Only
+  real transport failures / other statuses / unparsable bodies are
+  `"network"`.
 - Quota exceeded (HTTP 429, checked via `xhr.status` in pkjs) →
   `state: "quotaExceeded"`; the watch's 45s timer already rate-limits
   requests, don't add a separate pkjs-side backoff on top without a
