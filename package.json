@@ -14,7 +14,8 @@
 	"scripts": {
 		"lint": "biome check .",
 		"format": "biome format --write .",
-		"postinstall": "patch-package"
+		"postinstall": "patch-package",
+		"test": "node --test \"test/**/*.test.js\""
 	},
 	"pebble": {
 		"displayName": "StroyCommute",
