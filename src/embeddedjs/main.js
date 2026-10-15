@@ -127,6 +127,10 @@ const ALL_MESSAGE_KEYS = [
 	"minutes2",
 	"quotaRemaining",
 	"language",
+	"destStopRef",
+	"destStopName",
+	"mission",
+	"mission2",
 ];
 const MESSAGE_KEY_CODES = new Map(
 	ALL_MESSAGE_KEYS.map((key, index) => [key, 10000 + index])

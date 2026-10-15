@@ -1117,6 +1117,11 @@ function buildConfigDataUri() {
 }
 
 const moddableProxy = require("@moddable/pebbleproxy");
+const {
+	filterVisitsServingStop,
+	journeyMission,
+	decideCallGuard,
+} = require("./trips");
 
 // Shared by the initial "ready" send and the Task 8b configResendRequest
 // handler below -- both just need "resend whatever's currently persisted,
@@ -1252,7 +1257,7 @@ function sendConfigToWatch(config) {
 	];
 
 	config.trackedStops.forEach((stop, i) => {
-		items.push({
+		const item = {
 			itemIndex: 1 + i,
 			itemCount: itemCount,
 			itemType: "configStop",
@@ -1262,7 +1267,14 @@ function sendConfigToWatch(config) {
 			stopName: stop.stopName,
 			lineColor: stop.lineColor || "#888888",
 			lineTextColor: stop.lineTextColor || "#ffffff",
-		});
+		};
+		// Optional strings are omitted rather than sent empty (see
+		// docs/pebble-idfm-prim/SKILL.md, AppMessage format).
+		if (stop.destStopRef) {
+			item.destStopRef = stop.destStopRef;
+			item.destStopName = stop.destStopName || "";
+		}
+		items.push(item);
 	});
 
 	trackedLines.forEach((line, i) => {
@@ -1425,23 +1437,6 @@ function recordPrimRequestAndGetQuotaRemaining() {
 }
 
 /**
- * Fabricates a plausible "ok" departureUpdate for `request`, for UI
- * iteration when PRIM's quota is exhausted. See DEV_FAKE_DEPARTURES.
- * @param {{stopRef: string, lineRef: string, lineName: string}} request
- */
-function sendFakeDepartureUpdate(request) {
-	const minutes = 1 + Math.floor(Math.random() * 15);
-	sendDepartureUpdate(request.stopRef, request.lineRef, "ok", {
-		lineName: request.lineName,
-		destination: "Terminus (donnée factice)",
-		minutes: minutes,
-		minutes2: minutes + 3 + Math.floor(Math.random() * 10),
-		atStop: false,
-		cancelled: false,
-	});
-}
-
-/**
  * @param {object} journey - A SIRI MonitoredVehicleJourney.
  * @returns {string} Best available destination label, "" if none. SNCF
  *   (RER/Transilien) journeys don't always carry DestinationDisplay, and an
@@ -1462,184 +1457,246 @@ function journeyDestinationName(journey) {
 	return "";
 }
 
+const STOP_MONITORING_URL =
+	"https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring";
+
+/** @returns {object|null} The persisted config, if any. */
+function storedConfig() {
+	const stored = localStorage.getItem("stroycommuteConfig");
+	return stored ? JSON.parse(stored) : null;
+}
+
 /**
+ * Runs the PRIM call guard (see decideCallGuard in ./trips) for a refresh
+ * needing `count` calls, persisting its state.
+ * @param {object|null} config
+ * @param {number} count
+ * @returns {{allowed: boolean, minutesLeft: number}}
+ */
+function checkCallGuard(config, count) {
+	const stored = localStorage.getItem("stroycommuteCallGuard");
+	const decision = decideCallGuard(
+		stored ? JSON.parse(stored) : null,
+		config ? config.callGuard : undefined,
+		Date.now(),
+		count
+	);
+	localStorage.setItem("stroycommuteCallGuard", JSON.stringify(decision.state));
+	return decision;
+}
+
+/**
+ * Fetches one stop's visits for a line and calls `done(state, visits)`:
+ * state "ok" with the MonitoredStopVisit list, or a failure state
+ * ("quotaExceeded", "invalidKey", "invalidStop", "network") with no visits.
+ * @param {string} apiKey
  * @param {string} stopRef
  * @param {string} lineRef
- * @returns {{ref: string, name: string}[]} Destinations the user picked
- *   for this stop+line in the config page; empty means "all directions".
+ * @param {function(string, object[]=): void} done
  */
-function configuredDestinations(stopRef, lineRef) {
-	const stored = localStorage.getItem("stroycommuteConfig");
-	const config = stored ? JSON.parse(stored) : null;
-	const stops = config ? config.trackedStops : [];
-	const stop = stops.find(
-		(s) => s.stopRef === stopRef && s.lineRef === lineRef
-	);
-	return stop ? stop.destinations || [] : [];
-}
-
-/**
- * @param {object} journey - A SIRI MonitoredVehicleJourney.
- * @param {{ref: string, name: string}[]} destinations
- * @returns {boolean} True when `journey` heads to one of `destinations`
- *   (always true for an empty list). Matches on DestinationRef first --
- *   stable across label changes -- and falls back to the label.
- */
-function journeyMatchesDestinations(journey, destinations) {
-	if (destinations.length === 0) return true;
-	const ref = journey.DestinationRef ? journey.DestinationRef.value : "";
-	const name = journeyDestinationName(journey);
-	return destinations.some((d) => (d.ref ? d.ref === ref : d.name === name));
-}
-
-/**
- * Handles a watch-sent `refreshStop` request: fetches live PRIM data for
- * one stop+line and replies with a `departureUpdate` AppMessage (or a fake
- * one, see DEV_FAKE_DEPARTURES).
- * @param {{stopRef: string, lineRef: string, lineName: string}} request
- */
-function handleRefreshStop(request) {
-	const reply = (state, extra) =>
-		sendDepartureUpdate(request.stopRef, request.lineRef, state, extra);
-
-	if (DEV_FAKE_DEPARTURES) {
-		sendFakeDepartureUpdate(request);
-		return;
-	}
-
-	// Configs saved before the monomodalStopPlace fix (see idfmIdToStif in
-	// CONFIG_HTML) carry a ref with no numeric id left in it -- no point
-	// spending quota on a request PRIM can only reject.
-	if (/:monomodalStopPlace:$/.test(request.stopRef)) {
-		reply("invalidStop");
-		return;
-	}
-
-	const stored = localStorage.getItem("stroycommuteConfig");
-	const apiKey = stored ? JSON.parse(stored).apiKey : "";
-
+function fetchStopVisits(apiKey, stopRef, lineRef, done) {
 	const url =
-		"https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring" +
+		STOP_MONITORING_URL +
 		"?MonitoringRef=" +
-		encodeURIComponent(request.stopRef) +
+		encodeURIComponent(stopRef) +
 		"&LineRef=" +
-		encodeURIComponent(request.lineRef);
-
+		encodeURIComponent(lineRef);
 	const xhr = new XMLHttpRequest();
 	xhr.open("GET", url, true);
 	xhr.setRequestHeader("apiKey", apiKey);
 	xhr.onload = () => {
-		if (xhr.status === 429) {
-			reply("quotaExceeded");
-			return;
-		}
-		if (xhr.status === 401 || xhr.status === 403) {
-			reply("invalidKey");
-			return;
-		}
+		if (xhr.status === 429) return done("quotaExceeded");
+		if (xhr.status === 401 || xhr.status === 403) return done("invalidKey");
 		if (xhr.status === 400 || xhr.status === 404) {
-			console.log(`stop-monitoring ${xhr.status} for ${request.stopRef}`);
-			reply("invalidStop");
-			return;
+			console.log(`stop-monitoring ${xhr.status} for ${stopRef}`);
+			return done("invalidStop");
 		}
-		if (xhr.status < 200 || xhr.status >= 300) {
-			reply("network");
-			return;
-		}
-
+		if (xhr.status < 200 || xhr.status >= 300) return done("network");
+		let visits;
 		try {
-			const json = JSON.parse(xhr.responseText);
-			const visits =
-				json.Siri.ServiceDelivery.StopMonitoringDelivery[0]
-					.MonitoredStopVisit || [];
-			const destinations = configuredDestinations(
-				request.stopRef,
-				request.lineRef
-			);
-
-			// A stop area (RER/Transilien, see isStopArea in CONFIG_HTML)
-			// mixes both directions and isn't guaranteed to come back in time
-			// order, so filter on the user's chosen destinations and sort
-			// explicitly. Harmless for a single platform, already one
-			// direction. Visits with no usable time field are dropped here
-			// (see callMinutesRemaining's doc comment, the "undefined min"
-			// bug) rather than sent as a broken "ok". `rank` puts a vehicle
-			// at the platform first.
-			const departures = visits
-				.map((visit) => visit.MonitoredVehicleJourney)
-				.filter((journey) => journeyMatchesDestinations(journey, destinations))
-				.map((journey) => {
-					const call = journey.MonitoredCall;
-					const atStop = call.VehicleAtStop === true;
-					const minutes = callMinutesRemaining(call);
-					return {
-						journey: journey,
-						atStop: atStop,
-						cancelled: call.DepartureStatus === "cancelled",
-						// Real-hardware evidence: ExpectedArrivalTime can be a
-						// little in the past while VehicleAtStop hasn't flipped
-						// yet (PRIM polling lag, clock drift) -- floored at 0
-						// instead of rendering "-1 min".
-						minutes: minutes === null ? null : Math.max(0, minutes),
-						rank: atStop ? -1 : minutes,
-					};
-				})
-				.filter((d) => d.atStop || d.minutes !== null)
-				// Running trains first: a cancelled one is only shown when
-				// nothing else is announced, so it can't hide the real next
-				// departure behind "Cancelled".
-				.sort(
-					(a, b) => Number(a.cancelled) - Number(b.cancelled) || a.rank - b.rank
-				);
-
-			if (departures.length === 0) {
-				reply("noRealtimeData");
-				return;
-			}
-
-			const first = departures[0];
-			const extra = {
-				lineName: request.lineName,
-				destination: journeyDestinationName(first.journey),
-				// -1 when atStop is a sentinel the watch ignores in favor of
-				// the separate atStop field, not a real minute count.
-				minutes: first.atStop ? -1 : first.minutes,
-				atStop: first.atStop,
-				cancelled: first.cancelled,
-			};
-			// The watch has no at-stop flag for the following departure and
-			// prints minutes2 as-is, hence 0 rather than the -1 sentinel.
-			// Omitted (not null/NaN) when there's no following departure.
-			if (departures.length > 1 && !departures[1].cancelled) {
-				const second = departures[1];
-				extra.minutes2 = second.atStop ? 0 : second.minutes;
-			}
-
-			reply("ok", extra);
+			visits =
+				JSON.parse(xhr.responseText).Siri.ServiceDelivery
+					.StopMonitoringDelivery[0].MonitoredStopVisit || [];
 		} catch (error) {
-			console.log("departureUpdate parse error: " + error);
-			reply("network");
+			console.log("stop-monitoring parse error: " + error);
+			return done("network");
 		}
+		done("ok", visits);
 	};
-	xhr.onerror = () => {
-		reply("network");
-	};
+	xhr.onerror = () => done("network");
 	lastQuotaRemaining = recordPrimRequestAndGetQuotaRemaining();
 	xhr.send();
 }
 
+// When A and B both fail differently, the one the user can act on wins.
+const FAILURE_PRIORITY = [
+	"quotaExceeded",
+	"invalidKey",
+	"invalidStop",
+	"network",
+];
+
 /**
- * Sends a `departureUpdate` AppMessage to the watch for one stop+line.
- * lineRef is echoed back because the watch keys departures by
- * stopRef+lineRef: a stop area (RER/Transilien) is shared by every line
- * calling there, e.g. RER A and B at Châtelet-Les Halles.
+ * @param {string[]} states - One per request.
+ * @returns {string} The highest-priority failure state, or "ok".
+ */
+function worstState(states) {
+	for (const state of FAILURE_PRIORITY) {
+		if (states.includes(state)) return state;
+	}
+	return "ok";
+}
+
+/**
+ * Turns already-filtered visits into the watch's "ok"/"noRealtimeData"
+ * reply: drops visits without a usable time (the "undefined min" bug, see
+ * callMinutesRemaining), sorts running trains first then at-stop first
+ * then by minutes, and attaches the first two departures' mission codes.
+ * @param {object[]} visits - MonitoredStopVisit list.
+ * @param {string} lineName
+ * @param {function(string, object=): void} reply
+ */
+function replyWithDepartures(visits, lineName, reply) {
+	const departures = visits
+		.map((visit) => visit.MonitoredVehicleJourney)
+		.filter((journey) => journey && journey.MonitoredCall)
+		.map((journey) => {
+			const call = journey.MonitoredCall;
+			const atStop = call.VehicleAtStop === true;
+			const minutes = callMinutesRemaining(call);
+			return {
+				journey: journey,
+				atStop: atStop,
+				cancelled: call.DepartureStatus === "cancelled",
+				// ExpectedArrivalTime can be slightly in the past before
+				// VehicleAtStop flips (real-hardware evidence) -- floor at 0.
+				minutes: minutes === null ? null : Math.max(0, minutes),
+				rank: atStop ? -1 : minutes,
+			};
+		})
+		.filter((d) => d.atStop || d.minutes !== null)
+		// Running trains first: a cancelled one is only shown when nothing
+		// else is announced, so it can't hide the real next departure.
+		.sort(
+			(a, b) => Number(a.cancelled) - Number(b.cancelled) || a.rank - b.rank
+		);
+
+	if (departures.length === 0) {
+		reply("noRealtimeData");
+		return;
+	}
+
+	const first = departures[0];
+	const extra = {
+		lineName: lineName,
+		destination: journeyDestinationName(first.journey),
+		// -1 when atStop is a sentinel the watch ignores in favor of atStop.
+		minutes: first.atStop ? -1 : first.minutes,
+		atStop: first.atStop,
+		cancelled: first.cancelled,
+	};
+	const mission = journeyMission(first.journey);
+	if (mission) extra.mission = mission;
+	// The watch prints minutes2 as-is (no at-stop flag for it), hence 0
+	// rather than -1. Omitted when there's no running following departure.
+	if (departures.length > 1 && !departures[1].cancelled) {
+		const second = departures[1];
+		extra.minutes2 = second.atStop ? 0 : second.minutes;
+		const mission2 = journeyMission(second.journey);
+		if (mission2) extra.mission2 = mission2;
+	}
+	reply("ok", extra);
+}
+
+/**
+ * Handles a watch-sent `refreshStop`: one stop-monitoring request on A, or
+ * two in parallel (A and B) for an A->B trip, kept to trains serving A then
+ * B (filterVisitsServingStop). Replies with one `departureUpdate`.
+ * @param {{stopRef: string, lineRef: string, lineName: string,
+ *   destStopRef?: string}} request
+ */
+function handleRefreshStop(request) {
+	const destStopRef = request.destStopRef || "";
+	const reply = (state, extra) =>
+		sendDepartureUpdate(
+			request.stopRef,
+			request.lineRef,
+			destStopRef,
+			state,
+			extra
+		);
+
+	if (DEV_FAKE_DEPARTURES) {
+		const minutes = 1 + Math.floor(Math.random() * 15);
+		reply("ok", {
+			lineName: request.lineName,
+			destination: "Terminus (donnée factice)",
+			minutes: minutes,
+			minutes2: minutes + 3 + Math.floor(Math.random() * 10),
+			atStop: false,
+			cancelled: false,
+			mission: "FAKE",
+			mission2: "TEST",
+		});
+		return;
+	}
+
+	const refs = destStopRef
+		? [request.stopRef, destStopRef]
+		: [request.stopRef];
+	// Configs saved before the monomodalStopPlace fix (see idfmIdToStif in
+	// CONFIG_HTML) carry a ref with no numeric id -- PRIM can only reject it.
+	if (refs.some((ref) => /:monomodalStopPlace:$/.test(ref))) {
+		reply("invalidStop");
+		return;
+	}
+
+	const config = storedConfig();
+	const guard = checkCallGuard(config, refs.length);
+	if (!guard.allowed) {
+		reply("rateLimited", { minutes: guard.minutesLeft });
+		return;
+	}
+
+	const apiKey = config ? config.apiKey : "";
+	const results = [];
+	let pending = refs.length;
+	refs.forEach((ref, i) => {
+		fetchStopVisits(apiKey, ref, request.lineRef, (state, visits) => {
+			results[i] = { state: state, visits: visits };
+			pending -= 1;
+			if (pending > 0) return;
+			const failure = worstState(results.map((r) => r.state));
+			if (failure !== "ok") {
+				reply(failure);
+				return;
+			}
+			try {
+				const kept = destStopRef
+					? filterVisitsServingStop(results[0].visits, results[1].visits)
+					: results[0].visits;
+				replyWithDepartures(kept, request.lineName, reply);
+			} catch (error) {
+				console.log("departureUpdate build error: " + error);
+				reply("network");
+			}
+		});
+	});
+}
+
+/**
+ * Sends a `departureUpdate` AppMessage for one tracked trip. stopRef,
+ * lineRef and destStopRef are echoed back: together they are the watch's
+ * key (a stop area is shared by several lines, and one stop+line can be
+ * tracked towards several arrivals).
  * @param {string} stopRef
  * @param {string} lineRef
- * @param {"ok"|"network"|"noRealtimeData"|"quotaExceeded"|"invalidKey"|"invalidStop"} state
- * @param {object} [extra] - Extra fields (lineName, destination, minutes,
- *   minutes2, atStop, cancelled) merged in when `state` is "ok".
+ * @param {string} destStopRef - "" when the trip has no arrival (omitted).
+ * @param {"ok"|"network"|"noRealtimeData"|"quotaExceeded"|"invalidKey"|"invalidStop"|"rateLimited"} state
+ * @param {object} [extra] - lineName, destination, minutes, minutes2,
+ *   atStop, cancelled, mission, mission2 for "ok"; minutes for "rateLimited".
  */
-function sendDepartureUpdate(stopRef, lineRef, state, extra) {
+function sendDepartureUpdate(stopRef, lineRef, destStopRef, state, extra) {
 	const payload = Object.assign(
 		{
 			itemType: "departureUpdate",
@@ -1649,9 +1706,9 @@ function sendDepartureUpdate(stopRef, lineRef, state, extra) {
 		},
 		extra || {}
 	);
-	// Attached to every reply regardless of state (including error states --
-	// a request against the quota was made either way) so the watch's
-	// settings screen always reflects the latest known count.
+	if (destStopRef) payload.destStopRef = destStopRef;
+	// Attached to every reply regardless of state so the watch's settings
+	// screen always reflects the latest known count.
 	if (lastQuotaRemaining !== null) payload.quotaRemaining = lastQuotaRemaining;
 	Pebble.sendAppMessage(payload);
 }

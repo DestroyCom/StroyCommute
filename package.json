@@ -56,7 +56,11 @@
 			"lineTextColor",
 			"minutes2",
 			"quotaRemaining",
-			"language"
+			"language",
+			"destStopRef",
+			"destStopName",
+			"mission",
+			"mission2"
 		],
 		"resources": {
 			"media": [
