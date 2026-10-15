@@ -6,3 +6,4 @@ build/
 .env
 .superpowers/
 .lock*
+.prim_key
