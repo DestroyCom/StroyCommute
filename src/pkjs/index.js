@@ -1490,7 +1490,12 @@ function handleRefreshStop(request) {
 					};
 				})
 				.filter((d) => d.atStop || d.minutes !== null)
-				.sort((a, b) => a.rank - b.rank);
+				// Running trains first: a cancelled one is only shown when
+				// nothing else is announced, so it can't hide the real next
+				// departure behind "Cancelled".
+				.sort(
+					(a, b) => Number(a.cancelled) - Number(b.cancelled) || a.rank - b.rank
+				);
 
 			if (departures.length === 0) {
 				reply("noRealtimeData");
@@ -1510,7 +1515,7 @@ function handleRefreshStop(request) {
 			// The watch has no at-stop flag for the following departure and
 			// prints minutes2 as-is, hence 0 rather than the -1 sentinel.
 			// Omitted (not null/NaN) when there's no following departure.
-			if (departures.length > 1) {
+			if (departures.length > 1 && !departures[1].cancelled) {
 				const second = departures[1];
 				extra.minutes2 = second.atStop ? 0 : second.minutes;
 			}
