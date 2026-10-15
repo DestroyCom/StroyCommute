@@ -24,6 +24,8 @@ Mobilités API.
 - **Quota-aware**: refreshes only the stop on screen, only while the app is
   open in the foreground, every 45 s (or on demand with Select). A local
   counter shows how many PRIM requests are left today.
+- **English and French.** The app follows your watch's language by default;
+  you can force one in the settings.
 - **Your API key stays on your phone.** It is never sent to the watch.
 
 ## Supported hardware
@@ -49,13 +51,13 @@ normal use since the app only refreshes while it is open.
 
 Open the StroyCommute settings from the Pebble mobile app (gear icon), then:
 
-1. Paste your PRIM API key. It is checked live ("Clé valide ✓").
+1. Paste your PRIM API key. It is checked live ("Valid key ✓").
 2. Search for a stop (for example "Châtelet") and pick the line you want.
    - Metro/tram: each result is a single platform, so the direction is shown
      next to it.
    - RER/Transilien: choose one or more destinations in the picker that
      appears. Leave everything unchecked to follow every direction.
-3. Tap **Enregistrer** (save). The config is synced to the watch.
+3. Tap **Save**. The config is synced to the watch.
 
 You can follow up to 8 items.
 
@@ -130,6 +132,12 @@ pebble logs                        # live logs from watch and phone
   watch's XS engine don't reliably support it.
 - **Working without spending quota**: set `DEV_FAKE_DEPARTURES = true` in
   `src/pkjs/index.js` to get fake departures. Never ship it enabled.
+- **Translations** live in three places: `STRINGS` in
+  `src/embeddedjs/main.js` (watch), `I18N` in `config/index.html` (config
+  page) and `SUPPORTED_LANGUAGES` in `src/pkjs/index.js`. To add a language,
+  add it to all three.
+- **Traffic alerts are switched off** with `ALERTS_ENABLED = false`, in both
+  `config/index.html` and `src/pkjs/index.js`.
 - **Never commit an API key.** It is entered through the config page only.
 
 ## Privacy
@@ -143,7 +151,8 @@ pebble logs                        # live logs from watch and phone
 ## Roadmap
 
 - Traffic alerts for followed lines (PRIM `general-message`), with Pebble
-  Timeline pins. The config fields exist, but this isn't implemented yet.
+  Timeline pins. The settings exist but are hidden until this is done.
+- More languages.
 - Pebble Round 2 (`gabbro`) support.
 - Editing the directions of a RER stop without re-adding it.
 

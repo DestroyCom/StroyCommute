@@ -84,8 +84,11 @@ the exact item shapes.
 ## Watch <-> phone AppMessage format
 
 AppMessage now carries traffic in both directions:
-- **phone→watch (config)**: API key, tracked stops/lines, alert schedule
-  — sent once on config save and again on every pkjs `ready` (from
+- **phone→watch (config)**: tracked stops/lines, alert schedule, and
+  `language` (`"en"`/`"fr"`) in `configMeta`. With no config saved yet,
+  pkjs still sends a lone `configMeta` so the watch gets its language and
+  leaves "Loading...". Lines are not sent while `ALERTS_ENABLED` is false.
+  Sent once on config save and again on every pkjs `ready` (from
   persisted `localStorage`). See the spec above for the full
   `configMeta`/`configStop`/`configLine` item shapes.
 - **watch→phone (`refreshStop`)**: one item per tracked stop, sent by

@@ -1,6 +1,60 @@
 import Message from "pebble/message";
 
-console.log("Hello, Watchface.");
+// --- UI strings (fr/en) ---
+// The language is resolved phone-side (config page choice, or the watch's
+// own language via Pebble.getActiveWatchInfo() on "auto") and arrives in
+// configMeta. English until then -- only the boot-time "Loading..." is
+// ever shown before the first configMeta.
+const STRINGS = {
+	en: {
+		loading: "Loading...",
+		noStops: "No stop configured",
+		cycleHint: "Up / Down to switch",
+		network: "Network error",
+		noRealtimeData: "No real-time data for this stop",
+		quotaExceeded: "API quota exceeded",
+		invalidKey: "Invalid API key",
+		invalidStop: "Invalid stop, re-add it in the settings",
+		cancelled: "Cancelled",
+		atStop: "At platform",
+		towards: "To",
+		thenLabel: "Then",
+		settings: "Settings",
+		quotaRemaining: "PRIM quota: {n} left",
+		quotaUnknown: "PRIM quota: unknown",
+		alertsSoon: "Traffic alerts coming soon",
+	},
+	fr: {
+		loading: "Chargement...",
+		noStops: "Aucun arrêt configuré",
+		cycleHint: "Haut / Bas pour changer",
+		network: "Erreur réseau",
+		noRealtimeData: "Pas de temps réel pour cet arrêt",
+		quotaExceeded: "Quota API dépassé",
+		invalidKey: "Clé API invalide",
+		invalidStop: "Arrêt invalide, ré-ajoute-le dans les réglages",
+		cancelled: "Supprimé",
+		atStop: "À quai",
+		towards: "Vers",
+		thenLabel: "Puis",
+		settings: "Réglages",
+		quotaRemaining: "Quota PRIM : {n} restant(s)",
+		quotaUnknown: "Quota PRIM : inconnu",
+		alertsSoon: "Alertes trafic bientôt disponibles",
+	},
+};
+let language = "en";
+
+/**
+ * @param {string} key - A STRINGS entry.
+ * @param {number|string} [n] - Replaces "{n}" in the string, if any.
+ * @returns {string} The string in the current language.
+ */
+function t(key, n) {
+	const table = STRINGS[language] || STRINGS.en;
+	const str = table[key] || STRINGS.en[key] || key;
+	return n === undefined ? str : str.replace("{n}", String(n));
+}
 
 // --- Config state ---
 // Populated from AppMessage items sent by pkjs's sendConfigToWatch() (see
@@ -72,6 +126,7 @@ const ALL_MESSAGE_KEYS = [
 	"lineTextColor",
 	"minutes2",
 	"quotaRemaining",
+	"language",
 ];
 const MESSAGE_KEY_CODES = new Map(
 	ALL_MESSAGE_KEYS.map((key, index) => [key, 10000 + index])
@@ -116,6 +171,7 @@ const configMessageKeys = [
 	"stopName",
 	"lineColor",
 	"lineTextColor",
+	"language",
 ];
 
 const configMessage = new Message({
@@ -227,6 +283,7 @@ function handleConfigItem(item) {
 		scheduleStartMinutes = item.scheduleStartMinutes;
 		scheduleEndMinutes = item.scheduleEndMinutes;
 		timelineEnabled = !!item.timelineEnabled;
+		if (STRINGS[item.language]) language = item.language;
 		pendingConfigCount = item.itemCount;
 		pendingStops = [];
 		pendingLines = [];
@@ -454,14 +511,22 @@ function flushRefreshQueue() {
 	}
 }
 
+// PRIM replies that retrying can't fix (bad key, bad stop ref): automatic
+// refreshes (timer, screen switch) skip a stop in one of these states so it
+// doesn't burn the daily quota every 45s. Select still retries on demand,
+// and a new config clears `departures` (see onConfigReady below).
+const PERMANENT_ERROR_STATES = ["invalidKey", "invalidStop"];
+
 /**
  * Queues a refreshStop for the currently-selected stop, if any, then
  * flushes. A no-op for the "alert" item type (not PRIM data). Scoping to
  * just the viewed stop, instead of every tracked stop, is deliberate: no
  * reason to spend PRIM quota / Bluetooth traffic on stops the user isn't
  * currently looking at.
+ * @param {boolean} [manual] - True for an explicit Select press, which
+ *   retries even a stop in a PERMANENT_ERROR_STATES state.
  */
-function requestRefresh() {
+function requestRefresh(manual) {
 	const item = buildItemList()[selectedIndex];
 	// Deliberately not `item?.type` -- confirmed on real hardware that this
 	// XS engine's optional-chaining support is broken here (a runtime "call:
@@ -469,6 +534,10 @@ function requestRefresh() {
 	// switching this exact line to `?.`). Do not "simplify" this back.
 	// biome-ignore lint/complexity/useOptionalChain: see comment above
 	if (!item || item.type !== "stop") return;
+	const known = departures.get(departureKey(item));
+	if (!manual && known && PERMANENT_ERROR_STATES.includes(known.state)) {
+		return;
+	}
 	// Merge, don't overwrite: if the previous round hasn't fully drained
 	// (e.g. a Bluetooth stall keeps the single outbound slot busy across a
 	// tick boundary), discarding a still-pending entry here would silently
@@ -500,12 +569,15 @@ function requestRefresh() {
 /** Starts the 45s foreground departure-refresh timer, once. */
 function startRefreshTimer() {
 	if (refreshTimer) return;
-	refreshTimer = setInterval(requestRefresh, 45000);
+	refreshTimer = setInterval(() => requestRefresh(false), 45000);
 }
 
 const previousOnConfigReady = onConfigReady;
 onConfigReady = () => {
 	previousOnConfigReady();
+	// A new config may have fixed the API key or the stop -- forget every
+	// known state, permanent errors included (see PERMANENT_ERROR_STATES).
+	departures.clear();
 	startRefreshTimer();
 	// renderCurrentScreen()/requestRefresh() are declared further down
 	// (hoisted `function`s, so this forward reference resolves fine).
@@ -627,7 +699,7 @@ class MainBehavior extends Behavior {
 		// this exact pattern (broken optional-chaining on this XS engine).
 		// biome-ignore lint/complexity/useOptionalChain: see comment above
 		if (!item || item.type !== "stop") return true;
-		requestRefresh();
+		requestRefresh(true);
 		return true;
 	}
 	onReleaseSelect() {
@@ -700,7 +772,7 @@ function buildDetailScreen() {
 					left: 8,
 					right: 8,
 					style: rowStyle,
-					string: configLoaded ? "Aucun arrêt configuré" : "Chargement...",
+					string: configLoaded ? t("noStops") : t("loading"),
 				}),
 			],
 		});
@@ -721,7 +793,7 @@ function buildDetailScreen() {
 				style: rowStyle,
 				// Plain ASCII -- the Gothic bitmap font doesn't have glyphs
 				// for ▲▼, confirmed on real hardware (renders as tofu boxes).
-				string: "Haut / Bas pour changer",
+				string: t("cycleHint"),
 			})
 		);
 	}
@@ -768,7 +840,7 @@ function buildDetailScreen() {
 					left: 8,
 					right: 8,
 					style: errorStyle,
-					string: "Erreur réseau",
+					string: t("network"),
 				})
 			);
 		} else if (dep.state === "noRealtimeData") {
@@ -778,7 +850,7 @@ function buildDetailScreen() {
 					left: 8,
 					right: 8,
 					style: bodyStyle,
-					string: "Pas de temps réel pour cet arrêt",
+					string: t("noRealtimeData"),
 				})
 			);
 		} else if (dep.state === "quotaExceeded") {
@@ -788,7 +860,7 @@ function buildDetailScreen() {
 					left: 8,
 					right: 8,
 					style: errorStyle,
-					string: "Quota API dépassé",
+					string: t("quotaExceeded"),
 				})
 			);
 		} else if (dep.state === "invalidKey") {
@@ -798,7 +870,7 @@ function buildDetailScreen() {
 					left: 8,
 					right: 8,
 					style: errorStyle,
-					string: "Clé API invalide",
+					string: t("invalidKey"),
 				})
 			);
 		} else if (dep.state === "invalidStop") {
@@ -811,14 +883,14 @@ function buildDetailScreen() {
 					right: 8,
 					height: 44,
 					style: errorStyle,
-					string: "Arrêt invalide, ré-ajoute-le dans les réglages",
+					string: t("invalidStop"),
 				})
 			);
 		} else {
 			const status = dep.cancelled
-				? "Supprimé"
+				? t("cancelled")
 				: dep.atStop
-					? "À quai"
+					? t("atStop")
 					: `${dep.minutes} min`;
 			// Spinner refresh marker: a refreshStop for this stop is in flight
 			// (button press, screen switch, or the 45s timer) but hasn't
@@ -840,7 +912,7 @@ function buildDetailScreen() {
 					right: 8,
 					height: 44,
 					style: bodyStyle,
-					string: `Vers ${dep.destination}`,
+					string: dep.destination ? `${t("towards")} ${dep.destination}` : "",
 				})
 			);
 			lines.push(
@@ -861,7 +933,7 @@ function buildDetailScreen() {
 						left: 8,
 						right: 8,
 						style: bodyStyle,
-						string: `Puis ${dep.minutes2} min`,
+						string: `${t("thenLabel")} ${dep.minutes2} min`,
 					})
 				);
 			}
@@ -873,7 +945,7 @@ function buildDetailScreen() {
 				left: 8,
 				right: 8,
 				style: titleStyle,
-				string: "Réglages",
+				string: t("settings"),
 			})
 		);
 		lines.push(
@@ -884,8 +956,8 @@ function buildDetailScreen() {
 				style: bodyStyle,
 				string:
 					typeof quotaRemaining === "number"
-						? `Quota PRIM: ${quotaRemaining} restant(s)`
-						: "Quota PRIM: inconnu",
+						? t("quotaRemaining", quotaRemaining)
+						: t("quotaUnknown"),
 			})
 		);
 	} else {
@@ -904,7 +976,7 @@ function buildDetailScreen() {
 				left: 8,
 				right: 8,
 				style: bodyStyle,
-				string: "Alertes trafic bientôt disponibles",
+				string: t("alertsSoon"),
 			})
 		);
 	}

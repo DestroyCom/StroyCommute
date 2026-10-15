@@ -9,7 +9,7 @@
 // `require("fs")` and the next line, well before any Pebble.* listener
 // ever ran. Keep config/index.html and this constant in sync by hand.
 const CONFIG_HTML = `<!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -21,6 +21,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
   h2 { margin: 4px 0 16px; color: #fff; }
   fieldset { border: 1px solid #333; border-radius: 8px; margin-bottom: 16px; padding: 12px; }
   legend { font-weight: bold; padding: 0 4px; color: #fff; }
+  select { width: 100%; font-size: 16px; padding: 8px; border: 1px solid #444; border-radius: 4px; background: #111; color: #eee; }
   input[type="text"], input[type="time"] { width: 100%; font-size: 16px; padding: 8px; border: 1px solid #444; border-radius: 4px; margin-top: 4px; background: #111; color: #eee; }
   button { font-size: 15px; padding: 10px 14px; border: none; border-radius: 4px; background: #5555ff; color: white; }
   button.remove { background: #cc4444; padding: 8px 12px; }
@@ -49,53 +50,233 @@ const CONFIG_HTML = `<!DOCTYPE html>
   <h2>StroyCommute</h2>
 
   <fieldset>
-    <legend>Clé API PRIM</legend>
-    <input type="text" id="apiKey" placeholder="Clé API" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceValidateKey()">
+    <legend data-i18n="languageLegend">Langue</legend>
+    <select id="language" onchange="onLanguageChange()">
+      <option value="auto" data-i18n="languageAuto">Automatique (langue de la montre)</option>
+      <option value="fr">Français</option>
+      <option value="en">English</option>
+    </select>
+  </fieldset>
+
+  <fieldset>
+    <legend data-i18n="apiKeyLegend">Clé API PRIM</legend>
+    <input type="text" id="apiKey" data-i18n-placeholder="apiKeyPlaceholder" placeholder="Clé API" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceValidateKey()">
     <div id="apiKeyStatus" class="keyStatus"></div>
   </fieldset>
 
   <fieldset>
-    <legend>Arrêts suivis (départs)</legend>
+    <legend data-i18n="stopsLegend">Arrêts suivis (départs)</legend>
     <div id="stopsList"></div>
-    <input type="text" id="stopSearchInput" placeholder="Rechercher un arrêt (ex: Châtelet)" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceSearch('stop')" disabled>
+    <input type="text" id="stopSearchInput" data-i18n-placeholder="stopSearchPlaceholder" placeholder="Rechercher un arrêt (ex : Châtelet)" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceSearch('stop')" disabled>
     <div id="stopSearchResults" class="searchResults"></div>
     <div id="directionPicker"></div>
   </fieldset>
 
-  <fieldset>
-    <legend>Lignes suivies (alertes trafic)</legend>
-    <div id="linesList"></div>
-    <input type="text" id="lineSearchInput" placeholder="Rechercher une ligne (ex: 4, RER A)" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceSearch('line')" disabled>
-    <div id="lineSearchResults" class="searchResults"></div>
-  </fieldset>
+  <!-- Traffic alerts aren't implemented yet (fetchLineAlerts() is a stub on
+       the watch) -- hidden until they are, see ALERTS_ENABLED below. -->
+  <div id="alertsSection" hidden>
+    <fieldset>
+      <legend data-i18n="linesLegend">Lignes suivies (alertes trafic)</legend>
+      <div id="linesList"></div>
+      <input type="text" id="lineSearchInput" data-i18n-placeholder="lineSearchPlaceholder" placeholder="Rechercher une ligne (ex : 4, RER A)" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceSearch('line')" disabled>
+      <div id="lineSearchResults" class="searchResults"></div>
+    </fieldset>
 
-  <fieldset>
-    <legend>Période de réception des alertes</legend>
-    <div class="dayRow">
-      <label><input type="checkbox" class="dayBox" value="1" checked> Lun</label>
-      <label><input type="checkbox" class="dayBox" value="2" checked> Mar</label>
-      <label><input type="checkbox" class="dayBox" value="3" checked> Mer</label>
-      <label><input type="checkbox" class="dayBox" value="4" checked> Jeu</label>
-      <label><input type="checkbox" class="dayBox" value="5" checked> Ven</label>
-      <label><input type="checkbox" class="dayBox" value="6"> Sam</label>
-      <label><input type="checkbox" class="dayBox" value="0"> Dim</label>
-    </div>
-    <div class="timeRow">
-      <label>Début <input type="time" id="scheduleStart" value="07:00"></label>
-      <label>Fin <input type="time" id="scheduleEnd" value="19:30"></label>
-    </div>
-  </fieldset>
+    <fieldset>
+      <legend data-i18n="scheduleLegend">Période de réception des alertes</legend>
+      <div class="dayRow">
+        <label><input type="checkbox" class="dayBox" value="1" checked> <span data-i18n="dayMon">Lun</span></label>
+        <label><input type="checkbox" class="dayBox" value="2" checked> <span data-i18n="dayTue">Mar</span></label>
+        <label><input type="checkbox" class="dayBox" value="3" checked> <span data-i18n="dayWed">Mer</span></label>
+        <label><input type="checkbox" class="dayBox" value="4" checked> <span data-i18n="dayThu">Jeu</span></label>
+        <label><input type="checkbox" class="dayBox" value="5" checked> <span data-i18n="dayFri">Ven</span></label>
+        <label><input type="checkbox" class="dayBox" value="6"> <span data-i18n="daySat">Sam</span></label>
+        <label><input type="checkbox" class="dayBox" value="0"> <span data-i18n="daySun">Dim</span></label>
+      </div>
+      <div class="timeRow">
+        <label><span data-i18n="scheduleStart">Début</span> <input type="time" id="scheduleStart" value="07:00"></label>
+        <label><span data-i18n="scheduleEnd">Fin</span> <input type="time" id="scheduleEnd" value="19:30"></label>
+      </div>
+    </fieldset>
 
-  <fieldset>
-    <legend>Timeline</legend>
-    <label><input type="checkbox" id="timelineEnabled"> Ajouter les infos IDFM (ex: fin d'incident) à la timeline</label>
-  </fieldset>
+    <fieldset>
+      <legend>Timeline</legend>
+      <label><input type="checkbox" id="timelineEnabled"> <span data-i18n="timelineLabel">Ajouter les infos IDFM (ex : fin d'incident) à la timeline</span></label>
+    </fieldset>
+  </div>
 
   <p id="itemCount"></p>
-  <button type="button" onclick="save()">Enregistrer</button>
+  <button type="button" onclick="save()" data-i18n="save">Enregistrer</button>
 
 <script>
   var MAX_ITEMS = 8;
+  // Traffic alerts (followed lines, schedule, timeline) aren't implemented
+  // on the watch yet: their section stays hidden and no line is saved.
+  var ALERTS_ENABLED = false;
+
+  // UI strings. Keep the language list in sync with SUPPORTED_LANGUAGES in
+  // src/pkjs/index.js and STRINGS in src/embeddedjs/main.js. "{name}"
+  // placeholders are filled by tf() -- never "$" + "{...}", see the
+  // no-template-literal note further down.
+  var I18N = {
+    fr: {
+      languageLegend: "Langue",
+      languageAuto: "Automatique (langue de la montre)",
+      apiKeyLegend: "Clé API PRIM",
+      apiKeyPlaceholder: "Clé API",
+      stopsLegend: "Arrêts suivis (départs)",
+      stopSearchPlaceholder: "Rechercher un arrêt (ex : Châtelet)",
+      linesLegend: "Lignes suivies (alertes trafic)",
+      lineSearchPlaceholder: "Rechercher une ligne (ex : 4, RER A)",
+      scheduleLegend: "Période de réception des alertes",
+      dayMon: "Lun", dayTue: "Mar", dayWed: "Mer", dayThu: "Jeu", dayFri: "Ven", daySat: "Sam", daySun: "Dim",
+      scheduleStart: "Début",
+      scheduleEnd: "Fin",
+      timelineLabel: "Ajouter les infos IDFM (ex : fin d'incident) à la timeline",
+      save: "Enregistrer",
+      keyChecking: "Vérification...",
+      keyValid: "Clé valide ✓",
+      keyInvalid: "Clé invalide",
+      keyQuota: "Quota PRIM atteint -- recherche activée quand même",
+      keyUnverified: "Vérification impossible -- recherche activée quand même",
+      keyNetwork: "Erreur réseau -- recherche activée quand même",
+      directionsLoading: "Chargement des directions...",
+      directionsQuestion: "{line} — {stop} : quelle(s) direction(s) ?",
+      directionsNone: "Aucun train annoncé en ce moment -- toutes directions.",
+      directionsUnavailable: "Directions indisponibles (quota/réseau) -- toutes directions.",
+      directionsHint: "Rien de coché = toutes directions.",
+      add: "Ajouter",
+      cancel: "Annuler",
+      searching: "Recherche...",
+      searchError: "Erreur de recherche (vérifie ta connexion).",
+      noResults: "Aucun résultat.",
+      stopResult: "{stop} — ligne {line} ({mode}, {town})",
+      lineResult: "Ligne {line} ({mode}, {operator})",
+      directionUnavailable: "(direction indisponible, réessaie plus tard)",
+      alreadyTracked: "Cet arrêt est déjà suivi pour cette ligne (supprime-le d'abord pour changer de direction).",
+      brokenRow: "Arrêt invalide (ancienne version) -- supprime-le et ré-ajoute-le",
+      allDirections: "toutes directions",
+      lineRow: "Ligne {line}",
+      itemCount: "{count} / {max} éléments suivis",
+      needItem: "Ajoute au moins un arrêt avant d'enregistrer.",
+      tooMany: "{max} éléments maximum au total.",
+      keyRequired: "La clé API PRIM est requise."
+    },
+    en: {
+      languageLegend: "Language",
+      languageAuto: "Automatic (watch language)",
+      apiKeyLegend: "PRIM API key",
+      apiKeyPlaceholder: "API key",
+      stopsLegend: "Followed stops (departures)",
+      stopSearchPlaceholder: "Search a stop (e.g. Châtelet)",
+      linesLegend: "Followed lines (traffic alerts)",
+      lineSearchPlaceholder: "Search a line (e.g. 4, RER A)",
+      scheduleLegend: "Alert schedule",
+      dayMon: "Mon", dayTue: "Tue", dayWed: "Wed", dayThu: "Thu", dayFri: "Fri", daySat: "Sat", daySun: "Sun",
+      scheduleStart: "Start",
+      scheduleEnd: "End",
+      timelineLabel: "Add IDFM notices (e.g. end of disruption) to the timeline",
+      save: "Save",
+      keyChecking: "Checking...",
+      keyValid: "Valid key ✓",
+      keyInvalid: "Invalid key",
+      keyQuota: "PRIM quota reached -- search enabled anyway",
+      keyUnverified: "Couldn't check the key -- search enabled anyway",
+      keyNetwork: "Network error -- search enabled anyway",
+      directionsLoading: "Loading directions...",
+      directionsQuestion: "{line} — {stop}: which direction(s)?",
+      directionsNone: "No train announced right now -- all directions.",
+      directionsUnavailable: "Directions unavailable (quota/network) -- all directions.",
+      directionsHint: "Nothing checked = all directions.",
+      add: "Add",
+      cancel: "Cancel",
+      searching: "Searching...",
+      searchError: "Search failed (check your connection).",
+      noResults: "No results.",
+      stopResult: "{stop} — line {line} ({mode}, {town})",
+      lineResult: "Line {line} ({mode}, {operator})",
+      directionUnavailable: "(direction unavailable, try again later)",
+      alreadyTracked: "This stop is already followed for this line (remove it first to change its direction).",
+      brokenRow: "Invalid stop (older version) -- remove it and add it again",
+      allDirections: "all directions",
+      lineRow: "Line {line}",
+      itemCount: "{count} / {max} items followed",
+      needItem: "Add at least one stop before saving.",
+      tooMany: "{max} items maximum in total.",
+      keyRequired: "The PRIM API key is required."
+    }
+  };
+  var lang = "en";
+
+  /**
+   * @param {string} key - An I18N entry.
+   * @returns {string} The string in the current language.
+   */
+  function t(key) {
+    return I18N[lang][key] || I18N.en[key] || key;
+  }
+
+  /**
+   * @param {string} key - An I18N entry with "{name}" placeholders.
+   * @param {Object<string, string|number>} vars
+   * @returns {string}
+   */
+  function tf(key, vars) {
+    return t(key).replace(/[{]([a-zA-Z]+)[}]/g, (match, name) => (name in vars ? String(vars[name]) : match));
+  }
+
+  /**
+   * @param {string} choice - The language select's value ("auto", "fr", "en").
+   * @returns {string} An I18N language code. "auto" follows the watch's
+   *   language as resolved by pkjs (window.__watchLanguage), then the
+   *   webview's own.
+   */
+  function resolveLanguage(choice) {
+    if (I18N[choice]) return choice;
+    var locale = window.__watchLanguage || navigator.language || "";
+    var code = locale.slice(0, 2).toLowerCase();
+    return I18N[code] ? code : "en";
+  }
+
+  /** Translates every static [data-i18n] / [data-i18n-placeholder] element. */
+  function applyStaticTranslations() {
+    document.documentElement.lang = lang;
+    document.querySelectorAll("[data-i18n]").forEach((el) => {
+      el.textContent = t(el.dataset.i18n);
+    });
+    document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+      el.placeholder = t(el.dataset.i18nPlaceholder);
+    });
+  }
+
+  /** Re-renders the whole page (static text and rows) in the selected language. */
+  function onLanguageChange() {
+    lang = resolveLanguage(document.getElementById("language").value);
+    applyStaticTranslations();
+    var stops = collectStops();
+    var lines = collectLines();
+    document.getElementById("stopsList").innerHTML = "";
+    document.getElementById("linesList").innerHTML = "";
+    stops.forEach(addStopRow);
+    lines.forEach(addLineRow);
+    updateCount();
+    if (keyStatus) setKeyStatus(keyStatus.key, keyStatus.color);
+  }
+
+  // Last API key status shown, so a language switch can re-translate it
+  // without spending another PRIM request on re-validating the key.
+  var keyStatus = null;
+
+  /**
+   * @param {string} key - An I18N entry, or "" to clear the status line.
+   * @param {string} [color]
+   */
+  function setKeyStatus(key, color) {
+    var statusEl = document.getElementById("apiKeyStatus");
+    keyStatus = key ? { key: key, color: color } : null;
+    statusEl.textContent = key ? t(key) : "";
+    statusEl.style.color = color || "#999";
+  }
   var SEARCH_API = "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/arrets-lignes/records";
   var STOP_MONITORING_API = "https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring";
   // Châtelet / ligne 4 -- this project's own known-good, already
@@ -273,13 +454,11 @@ const CONFIG_HTML = `<!DOCTYPE html>
     setSearchEnabled(false);
     clearTimeout(apiKeyValidateTimer);
     var key = document.getElementById("apiKey").value.trim();
-    var statusEl = document.getElementById("apiKeyStatus");
     if (!key) {
-      statusEl.textContent = "";
+      setKeyStatus("");
       return;
     }
-    statusEl.textContent = "Vérification...";
-    statusEl.style.color = "#999";
+    setKeyStatus("keyChecking", "#999");
     apiKeyValidateTimer = setTimeout(() => validateApiKey(key), 500);
   }
 
@@ -295,7 +474,6 @@ const CONFIG_HTML = `<!DOCTYPE html>
    * @param {string} key
    */
   function validateApiKey(key) {
-    var statusEl = document.getElementById("apiKeyStatus");
     var url = STOP_MONITORING_API + "?MonitoringRef=" + encodeURIComponent(PING_STOP_REF) + "&LineRef=" + encodeURIComponent(PING_LINE_REF);
     fetch(url, { headers: { apiKey: key } })
       .then((res) => {
@@ -305,27 +483,22 @@ const CONFIG_HTML = `<!DOCTYPE html>
         if (document.getElementById("apiKey").value.trim() !== key) return;
         if (res.status === 200) {
           apiKeyValidated = true;
-          statusEl.textContent = "Clé valide ✓";
-          statusEl.style.color = "#4caf50";
+          setKeyStatus("keyValid", "#4caf50");
           setSearchEnabled(true);
         } else if (res.status === 401 || res.status === 403) {
-          statusEl.textContent = "Clé invalide";
-          statusEl.style.color = "#cc4444";
+          setKeyStatus("keyInvalid", "#cc4444");
           setSearchEnabled(false);
         } else if (res.status === 429) {
-          statusEl.textContent = "Quota PRIM atteint -- recherche activée quand même";
-          statusEl.style.color = "#cc9944";
+          setKeyStatus("keyQuota", "#cc9944");
           setSearchEnabled(true);
         } else {
-          statusEl.textContent = "Vérification impossible -- recherche activée quand même";
-          statusEl.style.color = "#cc9944";
+          setKeyStatus("keyUnverified", "#cc9944");
           setSearchEnabled(true);
         }
       })
       .catch(() => {
         if (document.getElementById("apiKey").value.trim() !== key) return;
-        statusEl.textContent = "Erreur réseau -- recherche activée quand même";
-        statusEl.style.color = "#cc9944";
+        setKeyStatus("keyNetwork", "#cc9944");
         setSearchEnabled(true);
       });
   }
@@ -410,17 +583,17 @@ const CONFIG_HTML = `<!DOCTYPE html>
    */
   function openDirectionPicker(values) {
     var pickerEl = document.getElementById("directionPicker");
-    pickerEl.innerHTML = '<div class="directionPicker"><div class="searchStatus">Chargement des directions...</div></div>';
+    pickerEl.innerHTML = '<div class="directionPicker"><div class="searchStatus">' + escapeHtml(t("directionsLoading")) + '</div></div>';
     fetchDestinations(document.getElementById("apiKey").value.trim(), values.stopRef, values.lineRef).then((destinations) => {
       var box = document.createElement("div");
       box.className = "directionPicker";
       var title = document.createElement("div");
-      title.textContent = values.lineName + " — " + values.stopName + " : quelle(s) direction(s) ?";
+      title.textContent = tf("directionsQuestion", { line: values.lineName, stop: values.stopName });
       box.appendChild(title);
       if (!destinations || destinations.length === 0) {
         const info = document.createElement("div");
         info.className = "searchStatus";
-        info.textContent = destinations ? "Aucun train annoncé en ce moment -- toutes directions." : "Directions indisponibles (quota/réseau) -- toutes directions.";
+        info.textContent = destinations ? t("directionsNone") : t("directionsUnavailable");
         box.appendChild(info);
       } else {
         destinations.forEach((d) => {
@@ -436,14 +609,14 @@ const CONFIG_HTML = `<!DOCTYPE html>
         });
         const hint = document.createElement("div");
         hint.className = "searchStatus";
-        hint.textContent = "Rien de coché = toutes directions.";
+        hint.textContent = t("directionsHint");
         box.appendChild(hint);
       }
       var buttons = document.createElement("div");
       buttons.className = "pickerButtons";
       var addBtn = document.createElement("button");
       addBtn.type = "button";
-      addBtn.textContent = "Ajouter";
+      addBtn.textContent = t("add");
       addBtn.onclick = () => {
         var chosen = [];
         box.querySelectorAll(".destinationBox").forEach((check) => {
@@ -456,7 +629,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
       var cancelBtn = document.createElement("button");
       cancelBtn.type = "button";
       cancelBtn.className = "remove";
-      cancelBtn.textContent = "Annuler";
+      cancelBtn.textContent = t("cancel");
       cancelBtn.onclick = () => {
         pickerEl.innerHTML = "";
       };
@@ -492,7 +665,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
    */
   function runSearch(kind, query) {
     var resultsEl = document.getElementById(kind + "SearchResults");
-    resultsEl.innerHTML = '<div class="searchStatus">Recherche...</div>';
+    resultsEl.innerHTML = '<div class="searchStatus">' + escapeHtml(t("searching")) + '</div>';
     // Strip quotes from the query before building the API's "where" clause
     // -- avoids breaking the clause's own quoting, not a real injection
     // risk against a read-only public search endpoint, but cheap to do.
@@ -505,7 +678,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
         renderResults(kind, data.results || []);
       })
       .catch(() => {
-        resultsEl.innerHTML = '<div class="searchStatus">Erreur de recherche (vérifie ta connexion).</div>';
+        resultsEl.innerHTML = '<div class="searchStatus">' + escapeHtml(t("searchError")) + '</div>';
       });
   }
 
@@ -532,7 +705,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
     }
     resultsEl.innerHTML = "";
     if (results.length === 0) {
-      resultsEl.innerHTML = '<div class="searchStatus">Aucun résultat.</div>';
+      resultsEl.innerHTML = '<div class="searchStatus">' + escapeHtml(t("noResults")) + '</div>';
       return;
     }
     // A stop can have more than one stop_id for the exact same
@@ -551,8 +724,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
       var div = document.createElement("div");
       div.className = "searchResultItem";
       var baseLabel = kind === "stop"
-        ? r.stop_name + " — ligne " + r.route_long_name + " (" + r.mode + ", " + r.nom_commune + ")"
-        : "Ligne " + r.route_long_name + " (" + r.mode + ", " + r.operatorname + ")";
+        ? tf("stopResult", { stop: r.stop_name, line: r.route_long_name, mode: r.mode, town: r.nom_commune })
+        : tf("lineResult", { line: r.route_long_name, mode: r.mode, operator: r.operatorname });
       div.textContent = baseLabel;
       if (kind === "stop" && groups[r.stop_name + "|" + r.id] > 1 && !isStopArea(idfmIdToStif(r.stop_id, "stop"))) {
         div.textContent = baseLabel + " …";
@@ -561,7 +734,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
         // identical-looking rows with zero indication anything went wrong,
         // as if direction disambiguation just doesn't work. Say so instead.
         fetchDirection(document.getElementById("apiKey").value.trim(), idfmIdToStif(r.stop_id, "stop"), idfmIdToStif(r.id, "line")).then((destination) => {
-          div.textContent = destination ? baseLabel + " → " + destination : baseLabel + " (direction indisponible, réessaie plus tard)";
+          div.textContent = destination ? baseLabel + " → " + destination : baseLabel + " " + t("directionUnavailable");
         });
       }
       div.onclick = () => {
@@ -577,7 +750,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
           // The watch keys departures by stopRef+lineRef, so a duplicate
           // row would just show the same board twice.
           if (findStopRow(values.stopRef, values.lineRef)) {
-            alert("Cet arrêt est déjà suivi pour cette ligne (supprime-le d'abord pour changer de direction).");
+            alert(t("alreadyTracked"));
           } else if (isStopArea(values.stopRef)) {
             openDirectionPicker(values);
           } else {
@@ -631,10 +804,10 @@ const CONFIG_HTML = `<!DOCTYPE html>
     div.dataset.destinations = JSON.stringify(destinations);
     var detail = "";
     if (isBrokenStopRef(values.stopRef)) {
-      detail = '<span class="rowWarning">Arrêt invalide (ancienne version) -- supprime-le et ré-ajoute-le</span>';
+      detail = '<span class="rowWarning">' + escapeHtml(t("brokenRow")) + '</span>';
     } else if (isStopArea(values.stopRef)) {
       const names = destinations.map((d) => d.name).join(", ");
-      detail = '<span class="rowDirections">→ ' + escapeHtml(names || "toutes directions") + '</span>';
+      detail = '<span class="rowDirections">→ ' + escapeHtml(names || t("allDirections")) + '</span>';
     }
     div.innerHTML =
       '<span class="rowLabel"><span class="lineSwatch" style="background:' + escapeHtml(div.dataset.lineColor) + '"></span>' +
@@ -651,16 +824,16 @@ const CONFIG_HTML = `<!DOCTYPE html>
     div.dataset.lineRef = values.lineRef;
     div.dataset.lineName = values.lineName;
     div.innerHTML =
-      '<span class="rowLabel">Ligne ' + escapeHtml(values.lineName) + '</span>' +
+      '<span class="rowLabel">' + escapeHtml(tf("lineRow", { line: values.lineName })) + '</span>' +
       '<button type="button" class="remove" onclick="this.parentElement.remove(); updateCount();">x</button>';
     document.getElementById("linesList").appendChild(div);
     updateCount();
   }
 
-  /** Refreshes the "N / MAX_ITEMS éléments suivis" counter text. */
+  /** Refreshes the "N / MAX_ITEMS items followed" counter text. */
   function updateCount() {
-    var count = document.querySelectorAll(".stopRow").length + document.querySelectorAll(".lineRow").length;
-    document.getElementById("itemCount").textContent = count + " / " + MAX_ITEMS + " éléments suivis";
+    var count = collectStops().length + collectLines().length;
+    document.getElementById("itemCount").textContent = tf("itemCount", { count: count, max: MAX_ITEMS });
   }
 
   /** @returns {object[]} One entry per .stopRow, read from its dataset. */
@@ -682,9 +855,13 @@ const CONFIG_HTML = `<!DOCTYPE html>
     return result;
   }
 
-  /** @returns {object[]} One entry per .lineRow, read from its dataset. */
+  /**
+   * @returns {object[]} One entry per .lineRow, read from its dataset --
+   *   always empty while ALERTS_ENABLED is false, so lines saved by an
+   *   older version are dropped on the next save.
+   */
   function collectLines() {
-    var rows = document.querySelectorAll(".lineRow");
+    var rows = ALERTS_ENABLED ? document.querySelectorAll(".lineRow") : [];
     var result = [];
     rows.forEach((row) => {
       result.push({
@@ -700,15 +877,15 @@ const CONFIG_HTML = `<!DOCTYPE html>
     var stops = collectStops();
     var lines = collectLines();
     if (stops.length + lines.length === 0) {
-      alert("Ajoute au moins un arrêt ou une ligne avant d'enregistrer.");
+      alert(t("needItem"));
       return;
     }
     if (stops.length + lines.length > MAX_ITEMS) {
-      alert("Maximum " + MAX_ITEMS + " éléments (arrêts + lignes) au total.");
+      alert(tf("tooMany", { max: MAX_ITEMS }));
       return;
     }
     if (!document.getElementById("apiKey").value.trim()) {
-      alert("La clé API PRIM est requise.");
+      alert(t("keyRequired"));
       return;
     }
     var days = [];
@@ -724,7 +901,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
         startTime: document.getElementById("scheduleStart").value,
         endTime: document.getElementById("scheduleEnd").value
       },
-      timelineEnabled: document.getElementById("timelineEnabled").checked
+      timelineEnabled: document.getElementById("timelineEnabled").checked,
+      language: document.getElementById("language").value
     };
     var json = JSON.stringify(config);
     document.location = "pebblejs://close#" + encodeURIComponent(json);
@@ -735,7 +913,13 @@ const CONFIG_HTML = `<!DOCTYPE html>
   // buildConfigDataUri() in src/pkjs/index.js). Without this the page
   // always looks empty on reopen even though a previous save worked fine.
   (() => {
+    document.getElementById("alertsSection").hidden = !ALERTS_ENABLED;
     var initial = window.__initialConfig;
+    var choice = (initial && initial.language) || "auto";
+    document.getElementById("language").value = choice;
+    lang = resolveLanguage(choice);
+    applyStaticTranslations();
+    updateCount();
     if (!initial) return;
     document.getElementById("apiKey").value = initial.apiKey || "";
     if (initial.apiKey) validateApiKey(initial.apiKey);
@@ -827,9 +1011,12 @@ function buildConfigDataUri() {
 	const stored = localStorage.getItem("stroycommuteConfig");
 	const initialConfig = stored ? JSON.parse(stored) : null;
 	const injected = JSON.stringify(initialConfig).replace(/</g, "\\u003c");
+	// Resolved here rather than from the webview's navigator.language so the
+	// page's "auto" matches what the watch shows (see resolveLanguage).
+	const watchLanguage = JSON.stringify(resolveLanguage("auto"));
 	const html = CONFIG_HTML.replace(
 		"<script>",
-		`<script>window.__initialConfig = ${injected};`
+		`<script>window.__initialConfig = ${injected}; window.__watchLanguage = ${watchLanguage};`
 	);
 	return `data:text/html;charset=utf-8;base64,${utf8ToBase64(html)}`;
 }
@@ -839,10 +1026,60 @@ const moddableProxy = require("@moddable/pebbleproxy");
 // Shared by the initial "ready" send and the Task 8b configResendRequest
 // handler below -- both just need "resend whatever's currently persisted,
 // if anything".
-/** Resends whatever config is currently persisted in localStorage, if any. */
+// Languages the watch and config page have strings for -- keep in sync with
+// STRINGS in src/embeddedjs/main.js and I18N in config/index.html.
+const SUPPORTED_LANGUAGES = ["en", "fr"];
+
+/**
+ * @param {string} [choice] - The config page's language setting: "auto"
+ *   (default) or a SUPPORTED_LANGUAGES code.
+ * @returns {string} The SUPPORTED_LANGUAGES code to use. "auto" follows the
+ *   watch's own language ("fr_FR" -> "fr"), then the phone's, then English.
+ */
+function resolveLanguage(choice) {
+	if (SUPPORTED_LANGUAGES.includes(choice)) return choice;
+	let locale = "";
+	try {
+		const info = Pebble.getActiveWatchInfo();
+		// biome-ignore lint/complexity/useOptionalChain: no `?.` in pkjs (webpack 1, see journeyDestinationName)
+		locale = (info && info.language) || "";
+	} catch (_error) {
+		// Not available on every firmware/app version -- fall through.
+	}
+	if (!locale && typeof navigator !== "undefined") {
+		locale = navigator.language || "";
+	}
+	const code = locale.slice(0, 2).toLowerCase();
+	return SUPPORTED_LANGUAGES.includes(code) ? code : "en";
+}
+
+/**
+ * Resends whatever config is currently persisted in localStorage. With
+ * nothing saved yet, still sends a lone configMeta: it carries the language
+ * and lets the watch leave "Loading..." for its "no stop configured" screen
+ * instead of waiting on a config that will never come.
+ */
 function sendStoredConfigToWatch() {
 	const stored = localStorage.getItem("stroycommuteConfig");
-	if (stored) sendConfigToWatch(JSON.parse(stored));
+	if (stored) {
+		sendConfigToWatch(JSON.parse(stored));
+		return;
+	}
+	sendItemsSequentially(
+		[
+			{
+				itemIndex: 0,
+				itemCount: 1,
+				itemType: "configMeta",
+				scheduleDaysBitmask: 0,
+				scheduleStartMinutes: 0,
+				scheduleEndMinutes: 0,
+				timelineEnabled: 0,
+				language: resolveLanguage("auto"),
+			},
+		],
+		0
+	);
 }
 
 Pebble.addEventListener("ready", moddableProxy.readyReceived);
@@ -890,6 +1127,9 @@ function daysToBitmask(days) {
 	return mask;
 }
 
+// Mirrors ALERTS_ENABLED in CONFIG_HTML -- flip both together.
+const ALERTS_ENABLED = false;
+
 /**
  * Sends the full config (schedule + tracked stops/lines) to the watch as a
  * sequence of AppMessage items, one per stop/line plus a leading configMeta.
@@ -897,7 +1137,11 @@ function daysToBitmask(days) {
  *   trackedLines, alertSchedule, timelineEnabled).
  */
 function sendConfigToWatch(config) {
-	const itemCount = 1 + config.trackedStops.length + config.trackedLines.length;
+	// Traffic alerts aren't implemented yet (see ALERTS_ENABLED in
+	// CONFIG_HTML): lines saved by an older version would only show
+	// "coming soon" screens on the watch.
+	const trackedLines = ALERTS_ENABLED ? config.trackedLines : [];
+	const itemCount = 1 + config.trackedStops.length + trackedLines.length;
 
 	const items = [
 		{
@@ -908,6 +1152,7 @@ function sendConfigToWatch(config) {
 			scheduleStartMinutes: timeStringToMinutes(config.alertSchedule.startTime),
 			scheduleEndMinutes: timeStringToMinutes(config.alertSchedule.endTime),
 			timelineEnabled: config.timelineEnabled ? 1 : 0,
+			language: resolveLanguage(config.language),
 		},
 	];
 
@@ -925,7 +1170,7 @@ function sendConfigToWatch(config) {
 		});
 	});
 
-	config.trackedLines.forEach((line, i) => {
+	trackedLines.forEach((line, i) => {
 		items.push({
 			itemIndex: 1 + config.trackedStops.length + i,
 			itemCount: itemCount,
@@ -1109,8 +1354,8 @@ function sendFakeDepartureUpdate(request) {
  *   a bogus "network" error.
  */
 function journeyDestinationName(journey) {
-	// biome-ignore lint/complexity/useOptionalChain: no `?.` in pkjs -- the SDK's webpack 1 bundler predates ES2020 syntax
 	const candidates = [
+		// biome-ignore lint/complexity/useOptionalChain: no `?.` in pkjs -- the SDK's webpack 1 bundler predates ES2020 syntax
 		(journey.MonitoredCall || {}).DestinationDisplay,
 		journey.DestinationName,
 		journey.DirectionName,
