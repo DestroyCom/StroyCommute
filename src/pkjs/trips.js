@@ -100,7 +100,11 @@ function journeyMission(journey) {
 	return note && note.value ? note.value : "";
 }
 
-const DEFAULT_CALL_GUARD = { maxCalls: 40, windowMinutes: 10, pauseMinutes: 15 };
+const DEFAULT_CALL_GUARD = {
+	maxCalls: 40,
+	windowMinutes: 10,
+	pauseMinutes: 15,
+};
 const MINUTE_MS = 60000;
 
 /**
@@ -132,7 +136,11 @@ function normalizeCallGuard(settings) {
 			1,
 			DEFAULT_CALL_GUARD.windowMinutes
 		),
-		pauseMinutes: intAtLeast(s.pauseMinutes, 1, DEFAULT_CALL_GUARD.pauseMinutes),
+		pauseMinutes: intAtLeast(
+			s.pauseMinutes,
+			1,
+			DEFAULT_CALL_GUARD.pauseMinutes
+		),
 	};
 }
 
@@ -151,7 +159,11 @@ function normalizeCallGuard(settings) {
 function decideCallGuard(state, settings, now, count) {
 	const s = normalizeCallGuard(settings);
 	if (s.maxCalls === 0) {
-		return { allowed: true, minutesLeft: 0, state: { calls: [], pausedUntil: 0 } };
+		return {
+			allowed: true,
+			minutesLeft: 0,
+			state: { calls: [], pausedUntil: 0 },
+		};
 	}
 	let pausedUntil = (state && state.pausedUntil) || 0;
 	// A pause can't legitimately end later than pauseMinutes from now --
@@ -175,7 +187,11 @@ function decideCallGuard(state, settings, now, count) {
 		};
 	}
 	for (let i = 0; i < count; i++) calls.push(now);
-	return { allowed: true, minutesLeft: 0, state: { calls: calls, pausedUntil: 0 } };
+	return {
+		allowed: true,
+		minutesLeft: 0,
+		state: { calls: calls, pausedUntil: 0 },
+	};
 }
 
 module.exports = {

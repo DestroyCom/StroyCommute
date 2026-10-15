@@ -33,7 +33,6 @@ const CONFIG_HTML = `<!DOCTYPE html>
   .searchResultItem:active { background: #26263a; }
   .searchStatus { padding: 8px; font-size: 0.9em; color: #999; }
   .directionPicker { border: 1px solid #5555ff; border-radius: 6px; padding: 10px; margin-top: 6px; background: #14141c; }
-  .directionPicker label { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
   .directionPicker .pickerButtons { display: flex; gap: 8px; margin-top: 8px; }
   .rowDirections { display: block; font-size: 0.85em; color: #aaa; margin-top: 2px; }
   .rowWarning { display: block; font-size: 0.85em; color: #cc4444; margin-top: 2px; }
@@ -44,6 +43,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
   .timeRow { display: flex; gap: 16px; flex-wrap: wrap; }
   .timeRow label { display: flex; flex-direction: column; font-size: 0.9em; flex: 1; min-width: 120px; }
   #itemCount { font-size: 0.9em; color: #999; }
+  input[type="number"] { width: 100%; font-size: 16px; padding: 8px; border: 1px solid #444; border-radius: 4px; margin-top: 4px; background: #111; color: #eee; }
+  .returnButton { background: #444; padding: 8px 10px; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -105,6 +106,16 @@ const CONFIG_HTML = `<!DOCTYPE html>
     </fieldset>
   </div>
 
+  <fieldset>
+    <legend data-i18n="guardLegend">Garde-fou appels PRIM</legend>
+    <div class="searchStatus" data-i18n="guardHint">Après N appels en W minutes, plus aucun appel pendant P minutes. N = 0 : désactivé.</div>
+    <div class="timeRow">
+      <label><span data-i18n="guardMaxCalls">N (appels max)</span> <input type="number" id="guardMaxCalls" min="0" step="1" value="40"></label>
+      <label><span data-i18n="guardWindow">W (minutes)</span> <input type="number" id="guardWindow" min="1" step="1" value="10"></label>
+      <label><span data-i18n="guardPause">P (pause, minutes)</span> <input type="number" id="guardPause" min="1" step="1" value="15"></label>
+    </div>
+  </fieldset>
+
   <p id="itemCount"></p>
   <button type="button" onclick="save()" data-i18n="save">Enregistrer</button>
 
@@ -140,11 +151,18 @@ const CONFIG_HTML = `<!DOCTYPE html>
       keyQuota: "Quota PRIM atteint -- recherche activée quand même",
       keyUnverified: "Vérification impossible -- recherche activée quand même",
       keyNetwork: "Erreur réseau -- recherche activée quand même",
-      directionsLoading: "Chargement des directions...",
-      directionsQuestion: "{line} — {stop} : quelle(s) direction(s) ?",
-      directionsNone: "Aucun train annoncé en ce moment -- toutes directions.",
-      directionsUnavailable: "Directions indisponibles (quota/réseau) -- toutes directions.",
-      directionsHint: "Rien de coché = toutes directions.",
+      arrivalQuestion: "{line} — {stop} : arrêt d'arrivée ? (optionnel)",
+      arrivalPlaceholder: "Rechercher l'arrêt d'arrivée (ex : Issy)",
+      arrivalSkip: "Passer -- tous les trains",
+      arrivalSame: "L'arrêt d'arrivée doit être différent de l'arrêt de départ.",
+      addReturn: "⇄ Ajouter le retour",
+      allTrains: "tous les trains",
+      guardLegend: "Garde-fou appels PRIM",
+      guardHint: "Après N appels en W minutes, plus aucun appel pendant P minutes. N = 0 : désactivé.",
+      guardMaxCalls: "N (appels max)",
+      guardWindow: "W (minutes)",
+      guardPause: "P (pause, minutes)",
+      guardInvalid: "Garde-fou : N doit être 0 ou au moins 2, W et P au moins 1.",
       add: "Ajouter",
       cancel: "Annuler",
       searching: "Recherche...",
@@ -153,9 +171,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
       stopResult: "{stop} — ligne {line} ({mode}, {town})",
       lineResult: "Ligne {line} ({mode}, {operator})",
       directionUnavailable: "(direction indisponible, réessaie plus tard)",
-      alreadyTracked: "Cet arrêt est déjà suivi pour cette ligne (supprime-le d'abord pour changer de direction).",
+      alreadyTracked: "Ce trajet est déjà suivi.",
       brokenRow: "Arrêt invalide (ancienne version) -- supprime-le et ré-ajoute-le",
-      allDirections: "toutes directions",
       lineRow: "Ligne {line}",
       itemCount: "{count} / {max} éléments suivis",
       needItem: "Ajoute au moins un arrêt avant d'enregistrer.",
@@ -183,11 +200,18 @@ const CONFIG_HTML = `<!DOCTYPE html>
       keyQuota: "PRIM quota reached -- search enabled anyway",
       keyUnverified: "Couldn't check the key -- search enabled anyway",
       keyNetwork: "Network error -- search enabled anyway",
-      directionsLoading: "Loading directions...",
-      directionsQuestion: "{line} — {stop}: which direction(s)?",
-      directionsNone: "No train announced right now -- all directions.",
-      directionsUnavailable: "Directions unavailable (quota/network) -- all directions.",
-      directionsHint: "Nothing checked = all directions.",
+      arrivalQuestion: "{line} — {stop}: arrival stop? (optional)",
+      arrivalPlaceholder: "Search the arrival stop (e.g. Issy)",
+      arrivalSkip: "Skip -- all trains",
+      arrivalSame: "The arrival stop must differ from the boarding stop.",
+      addReturn: "⇄ Add return",
+      allTrains: "all trains",
+      guardLegend: "PRIM call guard",
+      guardHint: "After N calls within W minutes, no call for P minutes. N = 0: disabled.",
+      guardMaxCalls: "N (max calls)",
+      guardWindow: "W (minutes)",
+      guardPause: "P (pause, minutes)",
+      guardInvalid: "Call guard: N must be 0 or at least 2, W and P at least 1.",
       add: "Add",
       cancel: "Cancel",
       searching: "Searching...",
@@ -196,9 +220,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
       stopResult: "{stop} — line {line} ({mode}, {town})",
       lineResult: "Line {line} ({mode}, {operator})",
       directionUnavailable: "(direction unavailable, try again later)",
-      alreadyTracked: "This stop is already followed for this line (remove it first to change its direction).",
+      alreadyTracked: "This trip is already followed.",
       brokenRow: "Invalid stop (older version) -- remove it and add it again",
-      allDirections: "all directions",
       lineRow: "Line {line}",
       itemCount: "{count} / {max} items followed",
       needItem: "Add at least one stop before saving.",
@@ -541,104 +564,128 @@ const CONFIG_HTML = `<!DOCTYPE html>
       .catch(() => null);
   }
 
-  // A stop area (RER/Transilien) returns every train of the line at that
-  // station, both directions mixed -- so the user picks which terminus(es)
-  // they care about. Built from whatever PRIM currently announces there
-  // (typically the next hour or so): a terminus with no train announced
-  // right now won't be listed, the row can be re-added later to change it.
+  // A stop area (RER/Transilien) returns every train of the line, both
+  // directions mixed -- the user picks the stop they get off at, and pkjs
+  // keeps only trains calling at A then B (see filterVisitsServingStop in
+  // src/pkjs/trips.js). Search is restricted to the same line.
   /**
-   * @param {string} apiKey
-   * @param {string} stopRef - PRIM SIRI stop area ref.
-   * @param {string} lineRef - PRIM SIRI line ref.
-   * @returns {Promise<{ref: string, name: string}[]|null>} Distinct
-   *   destinations, or null on failure (quota, network, bad key).
+   * Shows the arrival-stop search for a stop area result, then adds the row.
+   * @param {object} values - Same shape as addStopRow's argument, plus
+   *   rawLineId (open-data line id, e.g. "IDFM:C01727").
    */
-  function fetchDestinations(apiKey, stopRef, lineRef) {
-    var url = STOP_MONITORING_API + "?MonitoringRef=" + encodeURIComponent(stopRef) + "&LineRef=" + encodeURIComponent(lineRef);
-    return fetch(url, { headers: { apiKey: apiKey } })
-      .then((res) => (res.status === 200 ? res.json() : null))
-      .then((data) => {
-        if (!data) return null;
-        var delivery = data.Siri && data.Siri.ServiceDelivery.StopMonitoringDelivery[0];
-        var visits = (delivery && delivery.MonitoredStopVisit) || [];
-        var seen = {};
-        var destinations = [];
-        visits.forEach((visit) => {
-          var journey = visit.MonitoredVehicleJourney;
-          var name = journeyDestinationName(journey);
-          var ref = (journey.DestinationRef && journey.DestinationRef.value) || "";
-          var key = ref || name;
-          if (!key || seen[key]) return;
-          seen[key] = true;
-          destinations.push({ ref: ref, name: name || ref });
-        });
-        return destinations.sort((a, b) => a.name.localeCompare(b.name));
-      })
-      .catch(() => null);
+  function openArrivalPicker(values) {
+    var pickerEl = document.getElementById("directionPicker");
+    var box = document.createElement("div");
+    box.className = "directionPicker";
+    var title = document.createElement("div");
+    title.textContent = tf("arrivalQuestion", { line: values.lineName, stop: values.stopName });
+    box.appendChild(title);
+    var input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = t("arrivalPlaceholder");
+    input.setAttribute("autocorrect", "off");
+    input.setAttribute("autocapitalize", "off");
+    input.setAttribute("autocomplete", "off");
+    input.spellcheck = false;
+    box.appendChild(input);
+    var results = document.createElement("div");
+    results.className = "searchResults";
+    box.appendChild(results);
+    var timer = null;
+    input.oninput = () => {
+      clearTimeout(timer);
+      var query = input.value.trim();
+      if (query.length < 2) {
+        results.innerHTML = "";
+        return;
+      }
+      timer = setTimeout(() => searchArrival(values, query, results, pickerEl), 300);
+    };
+    var buttons = document.createElement("div");
+    buttons.className = "pickerButtons";
+    var skipBtn = document.createElement("button");
+    skipBtn.type = "button";
+    skipBtn.textContent = t("arrivalSkip");
+    skipBtn.onclick = () => {
+      finishStopRow(values, "", "", pickerEl);
+    };
+    var cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "remove";
+    cancelBtn.textContent = t("cancel");
+    cancelBtn.onclick = () => {
+      pickerEl.innerHTML = "";
+    };
+    buttons.appendChild(skipBtn);
+    buttons.appendChild(cancelBtn);
+    box.appendChild(buttons);
+    pickerEl.innerHTML = "";
+    pickerEl.appendChild(box);
+    input.focus();
   }
 
   /**
-   * Shows the terminus picker for a stop area result, then adds the row.
-   * @param {object} values - Same shape as addStopRow's argument.
+   * Searches stops of values.rawLineId matching query and renders them
+   * into resultsEl; picking one finishes the row.
+   * @param {object} values
+   * @param {string} query
+   * @param {Element} resultsEl
+   * @param {Element} pickerEl
    */
-  function openDirectionPicker(values) {
-    var pickerEl = document.getElementById("directionPicker");
-    pickerEl.innerHTML = '<div class="directionPicker"><div class="searchStatus">' + escapeHtml(t("directionsLoading")) + '</div></div>';
-    fetchDestinations(document.getElementById("apiKey").value.trim(), values.stopRef, values.lineRef).then((destinations) => {
-      var box = document.createElement("div");
-      box.className = "directionPicker";
-      var title = document.createElement("div");
-      title.textContent = tf("directionsQuestion", { line: values.lineName, stop: values.stopName });
-      box.appendChild(title);
-      if (!destinations || destinations.length === 0) {
-        const info = document.createElement("div");
-        info.className = "searchStatus";
-        info.textContent = destinations ? t("directionsNone") : t("directionsUnavailable");
-        box.appendChild(info);
-      } else {
-        destinations.forEach((d) => {
-          var label = document.createElement("label");
-          var check = document.createElement("input");
-          check.type = "checkbox";
-          check.className = "destinationBox";
-          check.dataset.ref = d.ref;
-          check.dataset.name = d.name;
-          label.appendChild(check);
-          label.appendChild(document.createTextNode(d.name));
-          box.appendChild(label);
+  function searchArrival(values, query, resultsEl, pickerEl) {
+    resultsEl.innerHTML = '<div class="searchStatus">' + escapeHtml(t("searching")) + '</div>';
+    var safeQuery = query.replace(/"/g, "");
+    var where = 'id = "' + values.rawLineId.replace(/"/g, "") + '" and stop_name like "' + safeQuery + '"';
+    fetch(SEARCH_API + "?where=" + encodeURIComponent(where) + "&limit=15")
+      .then((res) => res.json())
+      .then((data) => {
+        var seen = {};
+        var stops = (data.results || []).filter((r) => {
+          if (seen[r.stop_id]) return false;
+          seen[r.stop_id] = true;
+          return true;
         });
-        const hint = document.createElement("div");
-        hint.className = "searchStatus";
-        hint.textContent = t("directionsHint");
-        box.appendChild(hint);
-      }
-      var buttons = document.createElement("div");
-      buttons.className = "pickerButtons";
-      var addBtn = document.createElement("button");
-      addBtn.type = "button";
-      addBtn.textContent = t("add");
-      addBtn.onclick = () => {
-        var chosen = [];
-        box.querySelectorAll(".destinationBox").forEach((check) => {
-          if (check.checked) chosen.push({ ref: check.dataset.ref, name: check.dataset.name });
+        resultsEl.innerHTML = "";
+        if (stops.length === 0) {
+          resultsEl.innerHTML = '<div class="searchStatus">' + escapeHtml(t("noResults")) + '</div>';
+          return;
+        }
+        stops.forEach((r) => {
+          var div = document.createElement("div");
+          div.className = "searchResultItem";
+          div.textContent = r.stop_name + " (" + r.nom_commune + ")";
+          div.onclick = () => {
+            var destStopRef = idfmIdToStif(r.stop_id, "stop");
+            if (destStopRef === values.stopRef) {
+              alert(t("arrivalSame"));
+              return;
+            }
+            finishStopRow(values, destStopRef, r.stop_name, pickerEl);
+          };
+          resultsEl.appendChild(div);
         });
-        values.destinations = chosen;
-        addStopRow(values);
-        pickerEl.innerHTML = "";
-      };
-      var cancelBtn = document.createElement("button");
-      cancelBtn.type = "button";
-      cancelBtn.className = "remove";
-      cancelBtn.textContent = t("cancel");
-      cancelBtn.onclick = () => {
-        pickerEl.innerHTML = "";
-      };
-      buttons.appendChild(addBtn);
-      buttons.appendChild(cancelBtn);
-      box.appendChild(buttons);
-      pickerEl.innerHTML = "";
-      pickerEl.appendChild(box);
-    });
+      })
+      .catch(() => {
+        resultsEl.innerHTML = '<div class="searchStatus">' + escapeHtml(t("searchError")) + '</div>';
+      });
+  }
+
+  /**
+   * Adds the row with its arrival (or none), unless already tracked.
+   * @param {object} values
+   * @param {string} destStopRef - "" for all trains.
+   * @param {string} destStopName - "" for all trains.
+   * @param {Element} pickerEl
+   */
+  function finishStopRow(values, destStopRef, destStopName, pickerEl) {
+    if (findStopRow(values.stopRef, values.lineRef, destStopRef)) {
+      alert(t("alreadyTracked"));
+      return;
+    }
+    values.destStopRef = destStopRef;
+    values.destStopName = destStopName;
+    addStopRow(values);
+    pickerEl.innerHTML = "";
   }
 
   // Debounced so a live search fires roughly once per pause in typing, not
@@ -745,14 +792,15 @@ const CONFIG_HTML = `<!DOCTYPE html>
             lineRef: idfmIdToStif(r.id, "line"),
             lineName: r.route_long_name,
             lineColor: lineStyleFor(r.id).color,
-            lineTextColor: lineStyleFor(r.id).textColor
+            lineTextColor: lineStyleFor(r.id).textColor,
+            rawLineId: r.id
           };
-          // The watch keys departures by stopRef+lineRef, so a duplicate
-          // row would just show the same board twice.
-          if (findStopRow(values.stopRef, values.lineRef)) {
+          if (isStopArea(values.stopRef)) {
+            openArrivalPicker(values);
+          } else if (findStopRow(values.stopRef, values.lineRef, "")) {
+            // The watch keys departures by stop+line+arrival, so a
+            // duplicate row would just show the same board twice.
             alert(t("alreadyTracked"));
-          } else if (isStopArea(values.stopRef)) {
-            openDirectionPicker(values);
           } else {
             addStopRow(values);
           }
@@ -776,12 +824,14 @@ const CONFIG_HTML = `<!DOCTYPE html>
   /**
    * @param {string} stopRef
    * @param {string} lineRef
-   * @returns {Element|null} The existing .stopRow for this stop+line, if any.
+   * @param {string} destStopRef - "" for a row without arrival.
+   * @returns {Element|null} The existing .stopRow for this trip, if any.
    */
-  function findStopRow(stopRef, lineRef) {
+  function findStopRow(stopRef, lineRef, destStopRef) {
     var rows = document.querySelectorAll(".stopRow");
     for (let i = 0; i < rows.length; i++) {
-      if (rows[i].dataset.stopRef === stopRef && rows[i].dataset.lineRef === lineRef) return rows[i];
+      const d = rows[i].dataset;
+      if (d.stopRef === stopRef && d.lineRef === lineRef && (d.destStopRef || "") === destStopRef) return rows[i];
     }
     return null;
   }
@@ -789,7 +839,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
   /**
    * @param {{stopRef: string, stopName: string, lineRef: string,
    *   lineName: string, lineColor?: string, lineTextColor?: string,
-   *   destinations?: {ref: string, name: string}[]}} values
+   *   destStopRef?: string, destStopName?: string}} values
    */
   function addStopRow(values) {
     var div = document.createElement("div");
@@ -800,21 +850,45 @@ const CONFIG_HTML = `<!DOCTYPE html>
     div.dataset.lineName = values.lineName;
     div.dataset.lineColor = values.lineColor || "#888888";
     div.dataset.lineTextColor = values.lineTextColor || "#ffffff";
-    var destinations = values.destinations || [];
-    div.dataset.destinations = JSON.stringify(destinations);
+    div.dataset.destStopRef = values.destStopRef || "";
+    div.dataset.destStopName = values.destStopName || "";
     var detail = "";
     if (isBrokenStopRef(values.stopRef)) {
       detail = '<span class="rowWarning">' + escapeHtml(t("brokenRow")) + '</span>';
     } else if (isStopArea(values.stopRef)) {
-      const names = destinations.map((d) => d.name).join(", ");
-      detail = '<span class="rowDirections">→ ' + escapeHtml(names || t("allDirections")) + '</span>';
+      detail = '<span class="rowDirections">→ ' + escapeHtml(div.dataset.destStopName || t("allTrains")) + '</span>';
     }
+    var returnButton = div.dataset.destStopRef
+      ? '<button type="button" class="returnButton" onclick="addReturnRow(this.parentElement)">' + escapeHtml(t("addReturn")) + '</button>'
+      : "";
     div.innerHTML =
       '<span class="rowLabel"><span class="lineSwatch" style="background:' + escapeHtml(div.dataset.lineColor) + '"></span>' +
-      escapeHtml(values.lineName + " — " + values.stopName) + detail + '</span>' +
+      escapeHtml(values.lineName + " — " + values.stopName) + detail + '</span>' + returnButton +
       '<button type="button" class="remove" onclick="this.parentElement.remove(); updateCount();">x</button>';
     document.getElementById("stopsList").appendChild(div);
     updateCount();
+  }
+
+  /**
+   * Adds the reversed trip (arrival becomes boarding) of an existing row.
+   * @param {Element} row - A .stopRow with a destStopRef.
+   */
+  function addReturnRow(row) {
+    var d = row.dataset;
+    if (findStopRow(d.destStopRef, d.lineRef, d.stopRef)) {
+      alert(t("alreadyTracked"));
+      return;
+    }
+    addStopRow({
+      stopRef: d.destStopRef,
+      stopName: d.destStopName,
+      lineRef: d.lineRef,
+      lineName: d.lineName,
+      lineColor: d.lineColor,
+      lineTextColor: d.lineTextColor,
+      destStopRef: d.stopRef,
+      destStopName: d.stopName
+    });
   }
 
   /** @param {{lineRef: string, lineName: string}} values */
@@ -849,7 +923,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
         lineName: row.dataset.lineName,
         lineColor: row.dataset.lineColor,
         lineTextColor: row.dataset.lineTextColor,
-        destinations: JSON.parse(row.dataset.destinations || "[]")
+        destStopRef: row.dataset.destStopRef || "",
+        destStopName: row.dataset.destStopName || ""
       });
     });
     return result;
@@ -872,6 +947,16 @@ const CONFIG_HTML = `<!DOCTYPE html>
     return result;
   }
 
+  /** @returns {{maxCalls: number, windowMinutes: number, pauseMinutes: number}|null} null if invalid. */
+  function collectCallGuard() {
+    var maxCalls = parseInt(document.getElementById("guardMaxCalls").value, 10);
+    var windowMinutes = parseInt(document.getElementById("guardWindow").value, 10);
+    var pauseMinutes = parseInt(document.getElementById("guardPause").value, 10);
+    var maxOk = maxCalls === 0 || maxCalls >= 2;
+    if (!maxOk || !(windowMinutes >= 1) || !(pauseMinutes >= 1)) return null;
+    return { maxCalls: maxCalls, windowMinutes: windowMinutes, pauseMinutes: pauseMinutes };
+  }
+
   /** Validates the form, then closes the webview with the config as JSON. */
   function save() {
     var stops = collectStops();
@@ -888,6 +973,11 @@ const CONFIG_HTML = `<!DOCTYPE html>
       alert(t("keyRequired"));
       return;
     }
+    var callGuard = collectCallGuard();
+    if (!callGuard) {
+      alert(t("guardInvalid"));
+      return;
+    }
     var days = [];
     document.querySelectorAll(".dayBox").forEach((box) => {
       if (box.checked) days.push(parseInt(box.value, 10));
@@ -902,6 +992,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
         endTime: document.getElementById("scheduleEnd").value
       },
       timelineEnabled: document.getElementById("timelineEnabled").checked,
+      callGuard: callGuard,
       language: document.getElementById("language").value
     };
     var json = JSON.stringify(config);
@@ -924,7 +1015,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
     document.getElementById("apiKey").value = initial.apiKey || "";
     if (initial.apiKey) validateApiKey(initial.apiKey);
     (initial.trackedStops || []).forEach((s) => {
-      addStopRow({ stopRef: s.stopRef, stopName: s.stopName, lineRef: s.lineRef, lineName: s.lineName, lineColor: s.lineColor, lineTextColor: s.lineTextColor, destinations: s.destinations });
+      addStopRow({ stopRef: s.stopRef, stopName: s.stopName, lineRef: s.lineRef, lineName: s.lineName, lineColor: s.lineColor, lineTextColor: s.lineTextColor, destStopRef: s.destStopRef, destStopName: s.destStopName });
     });
     (initial.trackedLines || []).forEach((l) => {
       addLineRow({ lineRef: l.lineRef, lineName: l.lineName });
@@ -938,6 +1029,10 @@ const CONFIG_HTML = `<!DOCTYPE html>
       document.getElementById("scheduleEnd").value = initial.alertSchedule.endTime || "19:30";
     }
     document.getElementById("timelineEnabled").checked = !!initial.timelineEnabled;
+    var guard = initial.callGuard || {};
+    if (typeof guard.maxCalls === "number") document.getElementById("guardMaxCalls").value = guard.maxCalls;
+    if (typeof guard.windowMinutes === "number") document.getElementById("guardWindow").value = guard.windowMinutes;
+    if (typeof guard.pauseMinutes === "number") document.getElementById("guardPause").value = guard.pauseMinutes;
   })();
 </script>
 </body>
