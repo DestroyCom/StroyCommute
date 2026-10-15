@@ -100,7 +100,88 @@ function journeyMission(journey) {
 	return note && note.value ? note.value : "";
 }
 
+const DEFAULT_CALL_GUARD = { maxCalls: 40, windowMinutes: 10, pauseMinutes: 15 };
+const MINUTE_MS = 60000;
+
+/**
+ * @param {*} value
+ * @param {number} min
+ * @param {number} fallback
+ * @returns {number} `value` as an integer >= min, or `fallback`.
+ */
+function intAtLeast(value, min, fallback) {
+	const n = Math.floor(Number(value));
+	return Number.isFinite(n) && n >= min ? n : fallback;
+}
+
+/**
+ * @param {object} [settings] - Config page's `callGuard` (may be missing
+ *   in configs saved before the guard existed).
+ * @returns {{maxCalls: number, windowMinutes: number, pauseMinutes: number}}
+ *   Sanitized settings. A positive maxCalls below 2 becomes 2: an A->B
+ *   refresh costs 2 calls at once and would otherwise never pass.
+ */
+function normalizeCallGuard(settings) {
+	const s = settings || {};
+	let maxCalls = intAtLeast(s.maxCalls, 0, DEFAULT_CALL_GUARD.maxCalls);
+	if (maxCalls === 1) maxCalls = 2;
+	return {
+		maxCalls: maxCalls,
+		windowMinutes: intAtLeast(
+			s.windowMinutes,
+			1,
+			DEFAULT_CALL_GUARD.windowMinutes
+		),
+		pauseMinutes: intAtLeast(s.pauseMinutes, 1, DEFAULT_CALL_GUARD.pauseMinutes),
+	};
+}
+
+/**
+ * Decides whether a refresh may spend `count` PRIM calls now.
+ * @param {{calls: number[], pausedUntil: number}|null} state - Persisted
+ *   guard state (null on first use).
+ * @param {object} [settings] - Raw `callGuard` settings.
+ * @param {number} now - Epoch ms.
+ * @param {number} count - Calls this refresh needs (1, or 2 for A->B).
+ * @returns {{allowed: boolean, minutesLeft: number,
+ *   state: {calls: number[], pausedUntil: number}}} `state` is the new
+ *   state to persist; `minutesLeft` (rounded up) is only meaningful when
+ *   refused.
+ */
+function decideCallGuard(state, settings, now, count) {
+	const s = normalizeCallGuard(settings);
+	if (s.maxCalls === 0) {
+		return { allowed: true, minutesLeft: 0, state: { calls: [], pausedUntil: 0 } };
+	}
+	let pausedUntil = (state && state.pausedUntil) || 0;
+	// A pause can't legitimately end later than pauseMinutes from now --
+	// if it does, the phone clock moved backwards: drop it rather than
+	// pausing for hours.
+	if (pausedUntil - now > s.pauseMinutes * MINUTE_MS) pausedUntil = 0;
+	if (pausedUntil > now) {
+		return {
+			allowed: false,
+			minutesLeft: Math.ceil((pausedUntil - now) / MINUTE_MS),
+			state: { calls: [], pausedUntil: pausedUntil },
+		};
+	}
+	const windowStart = now - s.windowMinutes * MINUTE_MS;
+	const calls = ((state && state.calls) || []).filter((t) => t > windowStart);
+	if (calls.length + count > s.maxCalls) {
+		return {
+			allowed: false,
+			minutesLeft: s.pauseMinutes,
+			state: { calls: [], pausedUntil: now + s.pauseMinutes * MINUTE_MS },
+		};
+	}
+	for (let i = 0; i < count; i++) calls.push(now);
+	return { allowed: true, minutesLeft: 0, state: { calls: calls, pausedUntil: 0 } };
+}
+
 module.exports = {
 	filterVisitsServingStop: filterVisitsServingStop,
 	journeyMission: journeyMission,
+	DEFAULT_CALL_GUARD: DEFAULT_CALL_GUARD,
+	normalizeCallGuard: normalizeCallGuard,
+	decideCallGuard: decideCallGuard,
 };
