@@ -154,3 +154,12 @@ Real-time and reference data provided by
 [PRIM](https://prim.iledefrance-mobilites.fr) and the
 [IDFM open-data portal](https://data.iledefrance-mobilites.fr). Line colors
 come from the IDFM line reference dataset.
+
+## License
+
+StroyCommute is free software, licensed under the
+[GNU General Public License v3.0](LICENSE) (GPL-3.0-only).
+
+You may use, study, modify and share it. If you distribute it or a modified
+version, you must release the full source code under the same license and
+keep the copyright and license notices.
