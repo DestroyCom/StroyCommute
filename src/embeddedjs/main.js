@@ -13,6 +13,7 @@ const STRINGS = {
 		network: "Network error",
 		noRealtimeData: "No real-time data for this stop",
 		quotaExceeded: "API quota exceeded",
+		rateLimited: "Paused (call guard), back in {n} min",
 		invalidKey: "Invalid API key",
 		invalidStop: "Invalid stop, re-add it in the settings",
 		cancelled: "Cancelled",
@@ -31,6 +32,7 @@ const STRINGS = {
 		network: "Erreur réseau",
 		noRealtimeData: "Pas de temps réel pour cet arrêt",
 		quotaExceeded: "Quota API dépassé",
+		rateLimited: "Pause anti-quota, reprise dans {n} min",
 		invalidKey: "Clé API invalide",
 		invalidStop: "Arrêt invalide, ré-ajoute-le dans les réglages",
 		cancelled: "Supprimé",
@@ -176,6 +178,8 @@ const configMessageKeys = [
 	"lineColor",
 	"lineTextColor",
 	"language",
+	"destStopRef",
+	"destStopName",
 ];
 
 const configMessage = new Message({
@@ -300,6 +304,8 @@ function handleConfigItem(item) {
 			stopName: item.stopName,
 			lineColor: item.lineColor || "#888888",
 			lineTextColor: item.lineTextColor || "#ffffff",
+			destStopRef: item.destStopRef || "",
+			destStopName: item.destStopName || "",
 		});
 	} else if (item.itemType === "configLine") {
 		pendingLines.push({ lineRef: item.lineRef, lineName: item.lineName });
@@ -350,12 +356,13 @@ const departures = new Map();
 /**
  * Key for `departures` and the pending-refresh maps. stopRef alone isn't
  * unique: a stop area (RER/Transilien, `STIF:StopArea:SP:...`) is shared by
- * every line calling there, e.g. RER A and B at Châtelet-Les Halles.
- * @param {{stopRef: string, lineRef: string}} item
+ * every line calling there, and one stop+line can be tracked towards
+ * several arrival stops.
+ * @param {{stopRef: string, lineRef: string, destStopRef?: string}} item
  * @returns {string}
  */
 function departureKey(item) {
-	return `${item.stopRef}|${item.lineRef}`;
+	return `${item.stopRef}|${item.lineRef}|${item.destStopRef || ""}`;
 }
 
 // Latest known PRIM quota remaining, shown on the settings screen. Global
@@ -376,6 +383,9 @@ const departureMessageKeys = [
 	"cancelled",
 	"minutes2",
 	"quotaRemaining",
+	"destStopRef",
+	"mission",
+	"mission2",
 ];
 
 // Same Message instance handles both directions of this protocol (receive
@@ -420,6 +430,8 @@ const departureMessage = new Message({
 			minutes2: item.minutes2, // undefined when there's no following departure
 			atStop: !!item.atStop,
 			cancelled: !!item.cancelled,
+			mission: item.mission || "",
+			mission2: item.mission2 || "",
 		});
 		renderCurrentScreen();
 	},
@@ -490,7 +502,8 @@ function startSpinnerTimer() {
 
 /**
  * Attempts one `refreshStop` write for `stop`.
- * @param {{stopRef: string, lineRef: string, lineName: string}} stop
+ * @param {{stopRef: string, lineRef: string, lineName: string,
+ *   destStopRef?: string}} stop
  * @returns {boolean} True if the write succeeded (outbound slot was free).
  */
 function tryWriteRefreshStop(stop) {
@@ -499,6 +512,8 @@ function tryWriteRefreshStop(stop) {
 	m.set("stopRef", stop.stopRef);
 	m.set("lineRef", stop.lineRef);
 	m.set("lineName", stop.lineName);
+	// Omitted when empty, never sent as "" (see pkjs sendConfigToWatch).
+	if (stop.destStopRef) m.set("destStopRef", stop.destStopRef);
 	try {
 		departureMessage.write(m);
 		return true;
@@ -635,6 +650,8 @@ function buildItemList() {
 			stopName: stop.stopName,
 			lineColor: stop.lineColor,
 			lineTextColor: stop.lineTextColor,
+			destStopRef: stop.destStopRef,
+			destStopName: stop.destStopName,
 		});
 	}
 	for (const line of alertLines) {
@@ -811,13 +828,17 @@ function buildDetailScreen() {
 				height: 44,
 				skin: new Skin({ fill: item.lineColor || "#888888" }),
 				contents: [
-					new Label(null, {
+					// Text (not Label) so a trip name can wrap onto 2 lines.
+					new Text(null, {
 						left: 8,
 						right: 8,
 						top: 0,
 						bottom: 0,
 						style: boardTitleStyle(item.lineTextColor),
-						string: `${item.lineName} — ${item.stopName}`,
+						// ASCII ">" -- Gothic has no arrow glyph (tofu, like ▲▼).
+						string: item.destStopName
+							? `${item.lineName} — ${item.stopName} > ${item.destStopName}`
+							: `${item.lineName} — ${item.stopName}`,
 					}),
 				],
 			})
@@ -865,6 +886,19 @@ function buildDetailScreen() {
 					right: 8,
 					style: errorStyle,
 					string: t("quotaExceeded"),
+				})
+			);
+		} else if (dep.state === "rateLimited") {
+			// Not a PERMANENT_ERROR_STATES entry: pkjs refuses cheaply until
+			// the pause ends, so the 45s timer must keep asking.
+			lines.push(
+				new Text(null, {
+					top: 60,
+					left: 8,
+					right: 8,
+					height: 44,
+					style: errorStyle,
+					string: t("rateLimited", dep.minutes),
 				})
 			);
 		} else if (dep.state === "invalidKey") {
@@ -916,7 +950,9 @@ function buildDetailScreen() {
 					right: 8,
 					height: 44,
 					style: bodyStyle,
-					string: dep.destination ? `${t("towards")} ${dep.destination}` : "",
+					string: dep.destination
+						? `${dep.mission ? `${dep.mission} - ` : ""}${t("towards")} ${dep.destination}`
+						: dep.mission,
 				})
 			);
 			lines.push(
@@ -937,7 +973,7 @@ function buildDetailScreen() {
 						left: 8,
 						right: 8,
 						style: bodyStyle,
-						string: `${t("thenLabel")} ${dep.minutes2} min`,
+						string: `${t("thenLabel")} ${dep.minutes2} min${dep.mission2 ? ` - ${dep.mission2}` : ""}`,
 					})
 				);
 			}
