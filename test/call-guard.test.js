@@ -4,6 +4,7 @@ const {
 	DEFAULT_CALL_GUARD,
 	normalizeCallGuard,
 	decideCallGuard,
+	callGuardSettingsChanged,
 } = require("../src/pkjs/trips");
 
 const MIN = 60000;
@@ -59,6 +60,16 @@ test("allowed again once the pause is over", () => {
 test("maxCalls 0 disables the guard", () => {
 	const state = { calls: new Array(500).fill(0), pausedUntil: 0 };
 	assert.strictEqual(decideCallGuard(state, { maxCalls: 0 }, 1, 2).allowed, true);
+});
+
+test("callGuardSettingsChanged compares normalized settings", () => {
+	assert.strictEqual(callGuardSettingsChanged(undefined, DEFAULT_CALL_GUARD), false);
+	assert.strictEqual(callGuardSettingsChanged({ maxCalls: 10 }, { maxCalls: 10 }), false);
+	assert.strictEqual(
+		callGuardSettingsChanged({ maxCalls: 10, windowMinutes: 10, pauseMinutes: 15 }, { maxCalls: 100, windowMinutes: 10, pauseMinutes: 15 }),
+		true
+	);
+	assert.strictEqual(callGuardSettingsChanged({ pauseMinutes: 15 }, { pauseMinutes: 5 }), true);
 });
 
 test("a pause ending further away than pauseMinutes (clock moved back) is treated as expired", () => {

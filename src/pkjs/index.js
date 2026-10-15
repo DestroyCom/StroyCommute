@@ -1121,6 +1121,7 @@ const {
 	filterVisitsServingStop,
 	journeyMission,
 	decideCallGuard,
+	callGuardSettingsChanged,
 } = require("./trips");
 
 // Shared by the initial "ready" send and the Task 8b configResendRequest
@@ -1204,6 +1205,13 @@ Pebble.addEventListener("showConfiguration", () => {
 Pebble.addEventListener("webviewclosed", (e) => {
 	if (!e.response) return;
 	const config = JSON.parse(decodeURIComponent(e.response));
+	const previous = localStorage.getItem("stroycommuteConfig");
+	const previousGuard = previous ? JSON.parse(previous).callGuard : undefined;
+	// New guard settings apply right away: a pause started under the old
+	// ones would otherwise keep running (see callGuardSettingsChanged).
+	if (callGuardSettingsChanged(previousGuard, config.callGuard)) {
+		localStorage.removeItem("stroycommuteCallGuard");
+	}
 	localStorage.setItem("stroycommuteConfig", JSON.stringify(config));
 	sendConfigToWatch(config);
 });

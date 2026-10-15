@@ -194,10 +194,28 @@ function decideCallGuard(state, settings, now, count) {
 	};
 }
 
+/**
+ * @param {object} [before] - Previously saved raw `callGuard` settings.
+ * @param {object} [after] - Newly saved raw `callGuard` settings.
+ * @returns {boolean} True when the effective (normalized) settings differ
+ *   -- the caller then resets the persisted guard state, so a pause
+ *   started under the old settings doesn't outlive them.
+ */
+function callGuardSettingsChanged(before, after) {
+	const a = normalizeCallGuard(before);
+	const b = normalizeCallGuard(after);
+	return (
+		a.maxCalls !== b.maxCalls ||
+		a.windowMinutes !== b.windowMinutes ||
+		a.pauseMinutes !== b.pauseMinutes
+	);
+}
+
 module.exports = {
 	filterVisitsServingStop: filterVisitsServingStop,
 	journeyMission: journeyMission,
 	DEFAULT_CALL_GUARD: DEFAULT_CALL_GUARD,
 	normalizeCallGuard: normalizeCallGuard,
 	decideCallGuard: decideCallGuard,
+	callGuardSettingsChanged: callGuardSettingsChanged,
 };
