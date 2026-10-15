@@ -77,9 +77,15 @@ And the Pebble framework docs and reference:
 ```bash
 pebble build                       # compile
 pebble install --emulator emery    # emulator, Pebble Time 2 (verify availability at implementation time)
-pebble install --cloudpebble       # physical watch (requires pebble login)
+pebble install --phone <phone-ip>  # physical watch over LAN (Pebble app > Settings > Phone > Connectivity > LAN developer connection)
 pebble logs                        # live logs, embeddedjs + pkjs
+npm test                           # pkjs unit tests (node:test), run on Windows
+npm run sync:config                # copy config/index.html into CONFIG_HTML after editing it
 ```
+
+Build from a WSL-native copy of the repo (`rsync` to `~/dev/StroyCommute`,
+excluding `node_modules`, `build` and `.prim_key`): npm writes corrupted
+files under `/mnt/d`.
 
 ## Project rules
 
@@ -107,8 +113,8 @@ pebble logs                        # live logs, embeddedjs + pkjs
   now also watch→phone (`refreshStop` requests) and phone→watch
   (`departureUpdate` responses). See
   `docs/superpowers/specs/2026-08-17-stroycommute-scaffold-design.md`
-  for the config protocol; the departures protocol is documented in the
-  SDD ledger until the design spec is updated to match.
+  for the config protocol; the departures protocol is documented in
+  `docs/pebble-idfm-prim/SKILL.md`.
 - Explicitly handle these states on the watch side: data OK, network
   error, stop with no real-time data available (not an error), quota
   exceeded (HTTP 429).

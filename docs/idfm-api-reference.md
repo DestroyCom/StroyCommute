@@ -49,9 +49,9 @@ portal (`arrets.xls` file / equivalent dataset).
 - RER/Transilien (SNCF) stops are stop areas:
   `IDFM:monomodalStopPlace:<ZdAId>` → `STIF:StopArea:SP:<ZdAId>:`. A stop
   area returns **both directions mixed**, not necessarily in time order —
-  pkjs sorts the visits and filters them on the destinations the user
-  picked in the config page (`trackedStops[].destinations`, matched on
-  `DestinationRef.value`, falling back to the destination label).
+  pkjs sorts the visits and, for an A→B trip, keeps only trains also
+  calling at the arrival stop (see "SNCF journey fields used for A→B
+  trips" below).
 - SNCF journeys don't always fill `MonitoredCall.DestinationDisplay` (can be
   missing or empty): fall back to `MonitoredVehicleJourney.DestinationName`
   then `DirectionName`.

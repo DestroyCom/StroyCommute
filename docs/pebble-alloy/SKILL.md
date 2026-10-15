@@ -66,13 +66,14 @@ NEVER edited by hand after generation (`uuidgen` once).
 ```bash
 pebble new-project <name> --javascript   # scaffold Alloy
 pebble build                             # compile
-pebble install --emulator basalt         # install on emulator (Pebble Time = basalt)
-pebble install --cloudpebble             # install on physical watch via mobile app
+pebble install --emulator emery          # install on emulator (Pebble Time 2)
+pebble install --phone <phone-ip>        # physical watch over LAN dev connection
+pebble install --cloudpebble             # physical watch via CloudPebble (needs pebble login)
 pebble logs                              # live logs (both embeddedjs AND pkjs)
 ```
 
-Useful target platform: `basalt` (Pebble Time / Time 2, 144x168 color
-rectangular display).
+Target platform: `emery` (Pebble Time 2). `basalt` is not an Alloy
+target (classic C SDK codename for the original Pebble Time).
 
 ## AppMessage — watch <-> phone protocol
 
