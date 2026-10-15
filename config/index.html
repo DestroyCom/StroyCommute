@@ -708,7 +708,7 @@
     // risk against a read-only public search endpoint, but cheap to do.
     var safeQuery = query.replace(/"/g, "");
     var field = kind === "stop" ? "stop_name" : "route_long_name";
-    var url = SEARCH_API + "?where=" + encodeURIComponent(field + ' like "' + safeQuery + '"') + "&limit=" + (kind === "stop" ? 15 : 50);
+    var url = SEARCH_API + "?where=" + encodeURIComponent(field + ' like "' + safeQuery + '"') + "&limit=" + (kind === "stop" ? STOP_RESULTS_FETCHED : 50);
     fetch(url)
       .then((res) => res.json())
       .then((data) => {
@@ -717,6 +717,26 @@
       .catch(() => {
         resultsEl.innerHTML = '<div class="searchStatus">' + escapeHtml(t("searchError")) + '</div>';
       });
+  }
+
+  // A big interchange matches dozens of stop+line records, mostly buses
+  // (Denfert-Rochereau: 46, RER B only 22nd) -- fetch them all and list
+  // rail first so RER/metro never fall past the visible cut.
+  var STOP_RESULTS_FETCHED = 100;
+  var STOP_RESULTS_SHOWN = 20;
+  var MODE_RANK = { RapidTransit: 0, LocalTrain: 0, Metro: 1, Tramway: 2 };
+
+  /**
+   * @param {object[]} results - Raw arrets-lignes stop records.
+   * @returns {object[]} Same records, rail first, then metro, tram, the
+   *   rest (bus...); API order kept within a mode.
+   */
+  function sortStopResults(results) {
+    var rank = (r) => (r.mode in MODE_RANK ? MODE_RANK[r.mode] : 3);
+    return results
+      .map((r, i) => ({ r: r, i: i }))
+      .sort((a, b) => rank(a.r) - rank(b.r) || a.i - b.i)
+      .map((x) => x.r);
   }
 
   /**
@@ -739,6 +759,8 @@
         }
       });
       results = unique.slice(0, 15);
+    } else {
+      results = sortStopResults(results).slice(0, STOP_RESULTS_SHOWN);
     }
     resultsEl.innerHTML = "";
     if (results.length === 0) {
