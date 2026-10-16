@@ -182,3 +182,7 @@ StroyCommute is free software, licensed under the
 You may use, study, modify and share it. If you distribute it or a modified
 version, you must release the full source code under the same license and
 keep the copyright and license notices.
+
+## Privacy
+
+See [PRIVACY.md](PRIVACY.md).
