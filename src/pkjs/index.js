@@ -58,8 +58,10 @@ const CONFIG_HTML = `<!DOCTYPE html>
   #itemCount { font-size: 0.9em; color: #999; }
   input[type="number"] { width: 100%; font-size: 16px; padding: 8px; border: 1px solid #444; border-radius: 4px; margin-top: 4px; background: #111; color: #eee; }
   .returnButton { background: #444; padding: 8px 10px; font-size: 13px; }
-  .moveButtons { display: flex; flex-direction: column; gap: 4px; }
-  .moveBtn { background: #444; padding: 2px 10px; font-size: 14px; line-height: 1.2; }
+  .stopRow { flex-wrap: wrap; }
+  .stopRow .rowLabel { flex: 1 1 100%; }
+  .moveButtons { display: flex; gap: 6px; margin-right: auto; }
+  .moveBtn { background: #444; padding: 8px 14px; font-size: 15px; line-height: 1; }
   .moveBtn:disabled { opacity: 0.3; }
 </style>
 </head>
