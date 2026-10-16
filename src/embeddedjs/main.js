@@ -137,6 +137,9 @@ const ALL_MESSAGE_KEYS = [
 	"destStopName",
 	"mission",
 	"mission2",
+	"staleReason",
+	"staleAge",
+	"pauseMinutes",
 ];
 const MESSAGE_KEY_CODES = new Map(
 	ALL_MESSAGE_KEYS.map((key, index) => [key, 10000 + index])
@@ -390,6 +393,9 @@ const departureMessageKeys = [
 	"destStopRef",
 	"mission",
 	"mission2",
+	"staleReason",
+	"staleAge",
+	"pauseMinutes",
 ];
 
 // Same Message instance handles both directions of this protocol (receive
@@ -426,19 +432,46 @@ const departureMessage = new Message({
 				renderCurrentScreen();
 			}, MIN_REFRESH_INDICATOR_MS - elapsed);
 		}
-		// During a call-guard pause, keep the last good times on screen
-		// (with their age, see buildDetailScreen) instead of replacing them
-		// with the bare pause message -- they're still the best information
-		// available. receivedAt stays the time those times arrived.
+		// During a call-guard pause, a network failure or an exceeded quota,
+		// keep the last good times on screen (with their age and the reason,
+		// see buildDetailScreen) instead of replacing them with a bare error
+		// message -- they're still the best information available. receivedAt
+		// stays the time those times arrived; the next good reply replaces
+		// the whole entry, which clears the marker. pkjs also sends its own
+		// saved copy as an "ok" reply carrying staleReason/staleAge, which is
+		// what makes this work right after the app was relaunched.
 		const previous = departures.get(key);
-		if (item.state === "rateLimited" && previous && previous.state === "ok") {
-			previous.pauseMinutes = item.minutes;
+		const staleReason =
+			item.state === "ok" && typeof item.staleReason === "string"
+				? item.staleReason
+				: undefined;
+		const failure = staleReason || item.state;
+		console.log(
+			`departureUpdate ${item.state} stale=${staleReason} age=${item.staleAge} had=${previous ? previous.state : "none"}`
+		);
+		if (
+			previous &&
+			previous.state === "ok" &&
+			(failure === "rateLimited" ||
+				failure === "network" ||
+				failure === "quotaExceeded")
+		) {
+			previous.pauseMinutes =
+				failure === "rateLimited"
+					? staleReason
+						? item.pauseMinutes
+						: item.minutes
+					: undefined;
+			previous.staleReason = failure === "rateLimited" ? undefined : failure;
 			renderCurrentScreen();
 			return;
 		}
 		departures.set(key, {
-			receivedAt: Date.now(),
+			receivedAt: Date.now() - (staleReason ? (item.staleAge || 0) * 60000 : 0),
 			state: item.state,
+			pauseMinutes:
+				staleReason === "rateLimited" ? item.pauseMinutes : undefined,
+			staleReason: staleReason === "rateLimited" ? undefined : staleReason,
 			line: item.lineName,
 			destination: item.destination,
 			minutes: item.minutes,
@@ -837,14 +870,17 @@ function buildDetailScreen() {
 	// cycle hint. Age is computed watch-side (no timezone involved) and
 	// refreshed on every render, i.e. at least once per timer tick.
 	const paused = !!dep && typeof dep.pauseMinutes === "number";
-	if (paused) {
+	// Same bottom banner when the last good times are kept through a network
+	// error or an exceeded quota: staleReason is that error's STRINGS key.
+	const stale = !!dep && typeof dep.staleReason === "string";
+	if (paused || stale) {
 		lines.push(
 			new Label(null, {
 				top: 178,
 				left: 8,
 				right: 8,
 				style: errorStyle,
-				string: t("pausedFor", dep.pauseMinutes),
+				string: paused ? t("pausedFor", dep.pauseMinutes) : t(dep.staleReason),
 			})
 		);
 		lines.push(
@@ -865,7 +901,7 @@ function buildDetailScreen() {
 	// element this screen ever renders (board banner, destination, status,
 	// following-departure line all stay well above top:200 on Emery's
 	// 228px-tall display).
-	if (items.length > 1 && !paused) {
+	if (items.length > 1 && !paused && !stale) {
 		lines.push(
 			new Label(null, {
 				top: 200,

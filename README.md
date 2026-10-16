@@ -11,6 +11,29 @@ Mobilités API.
 > StroyCommute is an independent project and is not affiliated with or endorsed
 > by Île-de-France Mobilités, RATP or SNCF.
 
+## Screenshots
+
+On the watch (Pebble Time 2). The language follows the watch by default.
+
+<table>
+  <tr>
+    <td align="center"><img src="screenshots/watch/emery_rer-b-en.png" width="180" alt="RER B with mission codes"><br><sub>RER, A → B with mission codes</sub></td>
+    <td align="center"><img src="screenshots/watch/emery_metro-4-fr.png" width="180" alt="Metro line 4"><br><sub>Metro, line colors</sub></td>
+    <td align="center"><img src="screenshots/watch/emery_tram-t3b-en.png" width="180" alt="Tram T3b"><br><sub>Tram</sub></td>
+    <td align="center"><img src="screenshots/watch/emery_offline-en.png" width="180" alt="Network error with last known times"><br><sub>Offline: last times are kept</sub></td>
+  </tr>
+</table>
+
+Settings page, in the Pebble app (follow stops, search, and a short guide to
+get your PRIM API key):
+
+<table>
+  <tr>
+    <td align="center"><img src="screenshots/phone/settings_en_api-key-guide.jpg" width="260" alt="Settings: API key guide"><br><sub>API key and how to get one</sub></td>
+    <td align="center"><img src="screenshots/phone/settings_fr_search.jpg" width="260" alt="Settings: stop search"><br><sub>Stop search, grouped by stop</sub></td>
+  </tr>
+</table>
+
 ## Features
 
 - **Live departures**: next departure plus the following one, in minutes, with
@@ -22,6 +45,8 @@ Mobilités API.
 - **Official line colors** on each departure board.
 - **Clear error states** on the watch: network error, invalid API key,
   invalid stop, quota exceeded, and stops with no real-time data.
+  If the network drops or the quota runs out while you already have times
+  on screen, the watch keeps them and shows the error plus how old they are.
 - **Quota-aware**: refreshes only the stop on screen, only while the app is
   open in the foreground, every 60 s (or on demand with Select). Switching
   screens only fetches when the data is over a minute old. A local counter
@@ -182,3 +207,7 @@ StroyCommute is free software, licensed under the
 You may use, study, modify and share it. If you distribute it or a modified
 version, you must release the full source code under the same license and
 keep the copyright and license notices.
+
+## Privacy
+
+See [PRIVACY.md](PRIVACY.md).

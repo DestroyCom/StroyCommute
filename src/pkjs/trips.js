@@ -211,7 +211,28 @@ function callGuardSettingsChanged(before, after) {
 	);
 }
 
+// Last good times older than this aren't worth showing as a fallback.
+const STALE_MAX_AGE_MINUTES = 30;
+
+/**
+ * Builds the fallback shown when a refresh fails (network, quota, call-guard
+ * pause): the trip's last good departure fields plus how old they are.
+ * @param {{at: number, extra: object}|null|undefined} saved - Last good
+ *   reply for the trip, as stored by pkjs.
+ * @param {number} now - Epoch ms.
+ * @returns {object|null} `extra` plus `staleAge` (whole minutes), or null
+ *   when nothing usable was saved (none, or older than the max age).
+ */
+function staleExtra(saved, now) {
+	if (!saved || typeof saved.at !== "number" || !saved.extra) return null;
+	const ageMinutes = Math.floor((now - saved.at) / MINUTE_MS);
+	// A negative age means the phone clock moved backwards: don't trust it.
+	if (ageMinutes < 0 || ageMinutes > STALE_MAX_AGE_MINUTES) return null;
+	return Object.assign({}, saved.extra, { staleAge: ageMinutes });
+}
+
 module.exports = {
+	staleExtra: staleExtra,
 	filterVisitsServingStop: filterVisitsServingStop,
 	journeyMission: journeyMission,
 	DEFAULT_CALL_GUARD: DEFAULT_CALL_GUARD,

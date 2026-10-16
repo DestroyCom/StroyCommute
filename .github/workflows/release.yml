@@ -1,0 +1,79 @@
+name: Release
+
+# Manual: Actions > Release > Run workflow, pick the bump type.
+# Bumps package.json, builds the .pbw, tags vX.Y.Z and attaches the .pbw to
+# a GitHub release. Upload that .pbw in the Pebble Developer Dashboard
+# (app > New Release): the appstore needs a version that was never used.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      release_notes:
+        description: Release notes (also used for the GitHub release)
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm check:config
+      - run: pnpm test
+
+      - name: Bump version
+        id: bump
+        run: |
+          npm version "${{ inputs.bump }}" --no-git-tag-version
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@v5
+
+      # NOTE: SDK install steps are unverified in CI -- see PR/chat notes.
+      - name: Install Pebble SDK
+        run: |
+          uv tool install pebble-tool
+          pebble sdk install latest
+
+      - name: Build
+        run: |
+          pebble build
+          ls -l build/*.pbw
+          SIZE=$(stat -c %s build/*.pbw)
+          test "$SIZE" -le 4613734 || { echo "pbw exceeds the 4.4 MB appstore limit"; exit 1; }
+          cp build/*.pbw "StroyCommute-${{ steps.bump.outputs.version }}.pbw"
+
+      - name: Commit, tag and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore: release v${{ steps.bump.outputs.version }}"
+          git tag "v${{ steps.bump.outputs.version }}"
+          git push origin HEAD --follow-tags
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ inputs.release_notes }}
+        run: |
+          gh release create "v${{ steps.bump.outputs.version }}" \
+            "StroyCommute-${{ steps.bump.outputs.version }}.pbw" \
+            --title "v${{ steps.bump.outputs.version }}" \
+            --notes "${NOTES:-Release v${{ steps.bump.outputs.version }}}"
