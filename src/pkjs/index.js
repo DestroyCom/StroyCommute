@@ -221,7 +221,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
       apiKeyPlaceholder: "API key",
       keyHelpTitle: "How do I get a PRIM API key?",
       keyHelp1: 'Create a free account on <a href="https://prim.iledefrance-mobilites.fr" target="_blank" rel="noopener">prim.iledefrance-mobilites.fr</a> (Île-de-France Mobilités) and confirm your e-mail address.',
-      keyHelp2: "Sign in, open the API catalog and pick \"Prochains passages\" (next departures at a stop or on a line).",
+      keyHelp2: "Sign in, open the API catalog and pick “Prochains passages” (next departures at a stop or on a line).",
       keyHelp3: "Subscribe to that API: it is free, no payment is asked.",
       keyHelp4: "In your account settings, generate your API key (token), copy it and paste it in the field above.",
       keyHelpNote: "The key stays on your phone: it is never sent to the watch. A new key is limited to about 1,000 requests per day. PRIM portal labels may change.",
