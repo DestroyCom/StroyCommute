@@ -137,6 +137,9 @@ const ALL_MESSAGE_KEYS = [
 	"destStopName",
 	"mission",
 	"mission2",
+	"staleReason",
+	"staleAge",
+	"pauseMinutes",
 ];
 const MESSAGE_KEY_CODES = new Map(
 	ALL_MESSAGE_KEYS.map((key, index) => [key, 10000 + index])
@@ -390,6 +393,9 @@ const departureMessageKeys = [
 	"destStopRef",
 	"mission",
 	"mission2",
+	"staleReason",
+	"staleAge",
+	"pauseMinutes",
 ];
 
 // Same Message instance handles both directions of this protocol (receive
@@ -431,25 +437,38 @@ const departureMessage = new Message({
 		// see buildDetailScreen) instead of replacing them with a bare error
 		// message -- they're still the best information available. receivedAt
 		// stays the time those times arrived; the next good reply replaces
-		// the whole entry, which clears the marker.
+		// the whole entry, which clears the marker. pkjs also sends its own
+		// saved copy as an "ok" reply carrying staleReason/staleAge, which is
+		// what makes this work right after the app was relaunched.
 		const previous = departures.get(key);
-		if (previous && previous.state === "ok") {
-			if (item.state === "rateLimited") {
-				previous.pauseMinutes = item.minutes;
-				previous.staleReason = undefined;
-				renderCurrentScreen();
-				return;
-			}
-			if (item.state === "network" || item.state === "quotaExceeded") {
-				previous.pauseMinutes = undefined;
-				previous.staleReason = item.state;
-				renderCurrentScreen();
-				return;
-			}
+		const staleReason =
+			item.state === "ok" && typeof item.staleReason === "string"
+				? item.staleReason
+				: undefined;
+		const failure = staleReason || item.state;
+		if (
+			previous &&
+			previous.state === "ok" &&
+			(failure === "rateLimited" ||
+				failure === "network" ||
+				failure === "quotaExceeded")
+		) {
+			previous.pauseMinutes =
+				failure === "rateLimited"
+					? staleReason
+						? item.pauseMinutes
+						: item.minutes
+					: undefined;
+			previous.staleReason = failure === "rateLimited" ? undefined : failure;
+			renderCurrentScreen();
+			return;
 		}
 		departures.set(key, {
-			receivedAt: Date.now(),
+			receivedAt: Date.now() - (staleReason ? (item.staleAge || 0) * 60000 : 0),
 			state: item.state,
+			pauseMinutes:
+				staleReason === "rateLimited" ? item.pauseMinutes : undefined,
+			staleReason: staleReason === "rateLimited" ? undefined : staleReason,
 			line: item.lineName,
 			destination: item.destination,
 			minutes: item.minutes,

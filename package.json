@@ -60,7 +60,10 @@
 			"destStopRef",
 			"destStopName",
 			"mission",
-			"mission2"
+			"mission2",
+			"staleReason",
+			"staleAge",
+			"pauseMinutes"
 		],
 		"resources": {
 			"media": [

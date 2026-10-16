@@ -1400,6 +1400,7 @@ const {
 	journeyMission,
 	decideCallGuard,
 	callGuardSettingsChanged,
+	staleExtra,
 } = require("./trips");
 
 // Shared by the initial "ready" send and the Task 8b configResendRequest
@@ -1894,6 +1895,32 @@ function replyWithDepartures(visits, lineName, reply) {
 	reply("ok", extra);
 }
 
+const LAST_GOOD_KEY = "stroycommuteLastGood";
+// Failures for which the last good times are still the best thing to show.
+const STALE_FALLBACK_STATES = ["network", "quotaExceeded", "rateLimited"];
+
+/** @returns {object} Last good reply per trip key, {} if none/garbled. */
+function loadLastGood() {
+	try {
+		return JSON.parse(localStorage.getItem(LAST_GOOD_KEY) || "{}") || {};
+	} catch (error) {
+		return {};
+	}
+}
+
+/**
+ * Remembers a trip's last good departure fields in localStorage, so a later
+ * failure -- even after the watch app was relaunched and lost its own
+ * memory -- can still show them (with their age).
+ * @param {string} tripKey
+ * @param {object} extra - The "ok" reply's fields.
+ */
+function saveLastGood(tripKey, extra) {
+	const all = loadLastGood();
+	all[tripKey] = { at: Date.now(), extra: extra };
+	localStorage.setItem(LAST_GOOD_KEY, JSON.stringify(all));
+}
+
 /**
  * Handles a watch-sent `refreshStop`: one stop-monitoring request on A, or
  * two in parallel (A and B) for an A->B trip, kept to trains serving A then
@@ -1903,7 +1930,8 @@ function replyWithDepartures(visits, lineName, reply) {
  */
 function handleRefreshStop(request) {
 	const destStopRef = request.destStopRef || "";
-	const reply = (state, extra) =>
+	const tripKey = [request.stopRef, request.lineRef, destStopRef].join("|");
+	const send = (state, extra) =>
 		sendDepartureUpdate(
 			request.stopRef,
 			request.lineRef,
@@ -1911,6 +1939,22 @@ function handleRefreshStop(request) {
 			state,
 			extra
 		);
+	const reply = (state, extra) => {
+		if (state === "ok") saveLastGood(tripKey, extra);
+		if (STALE_FALLBACK_STATES.includes(state)) {
+			// Keep showing the last good times, flagged with why they're old:
+			// sent as "ok" plus staleReason/staleAge (and the pause length for
+			// a call-guard pause) -- see the watch's departureUpdate handler.
+			const stale = staleExtra(loadLastGood()[tripKey], Date.now());
+			if (stale) {
+				stale.staleReason = state;
+				if (state === "rateLimited") stale.pauseMinutes = extra.minutes;
+				send("ok", stale);
+				return;
+			}
+		}
+		send(state, extra);
+	};
 
 	if (DEV_FAKE_DEPARTURES) {
 		const minutes = 1 + Math.floor(Math.random() * 15);
