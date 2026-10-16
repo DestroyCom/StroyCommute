@@ -897,6 +897,10 @@ const CONFIG_HTML = `<!DOCTYPE html>
    */
   function addReturnRow(row) {
     var d = row.dataset;
+    if (collectStops().length + collectLines().length >= MAX_ITEMS) {
+      alert(tf("tooMany", { max: MAX_ITEMS }));
+      return;
+    }
     if (findStopRow(d.destStopRef, d.lineRef, d.stopRef)) {
       alert(t("alreadyTracked"));
       return;

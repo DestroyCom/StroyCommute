@@ -15,9 +15,10 @@ Mobilités API.
 
 - **Live departures**: next departure plus the following one, in minutes, with
   "À quai" (at platform) and "Supprimé" (cancelled) states.
-- **Metro, tram, RER and Transilien.** For RER/Transilien stations you pick
-  which direction(s) to follow, because a station returns trains in both
-  directions.
+- **Metro, tram, RER and Transilien.** For RER/Transilien you can set an
+  arrival stop (A → B): the watch then only shows trains that actually stop
+  there, with their mission code (e.g. "SCAL"). Add the return trip in one
+  tap.
 - **Official line colors** on each departure board.
 - **Clear error states** on the watch: network error, invalid API key,
   invalid stop, quota exceeded, and stops with no real-time data.
@@ -56,9 +57,11 @@ Open the StroyCommute settings from the Pebble mobile app (gear icon), then:
 2. Search for a stop (for example "Châtelet") and pick the line you want.
    - Metro/tram: each result is a single platform, so the direction is shown
      next to it.
-   - RER/Transilien: choose one or more destinations in the picker that
-     appears. Leave everything unchecked to follow every direction.
-3. Tap **Save**. The config is synced to the watch.
+   - RER/Transilien: search the arrival stop in the picker that appears, or
+     tap **Skip** to follow every train.
+3. If you set an arrival stop, you can tap **⇄ Add return** on the row to
+   add the reverse trip.
+4. Tap **Save**. The config is synced to the watch.
 
 You can follow up to 8 items.
 
@@ -94,7 +97,7 @@ The last screen shows the remaining PRIM quota for the day.
   the phone avoids the watch's ~8 KB networking memory ceiling found during
   real-hardware testing.
 - **Config page (`config/index.html`)**: stop/line search through the IDFM
-  open-data `arrets-lignes` dataset, live API key check, and a direction
+  open-data `arrets-lignes` dataset, live API key check, and an arrival-stop
   picker for RER stations.
 
 More detail lives in [`docs/`](docs/): the PRIM payload reference, the
@@ -155,7 +158,7 @@ pebble logs                        # live logs from watch and phone
   Timeline pins. The settings exist but are hidden until this is done.
 - More languages.
 - Pebble Round 2 (`gabbro`) support.
-- Editing the directions of a RER stop without re-adding it.
+- Editing the arrival stop of a trip without re-adding it.
 
 ## Data & credits
 
