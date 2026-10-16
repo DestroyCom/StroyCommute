@@ -1940,12 +1940,23 @@ function handleRefreshStop(request) {
 			extra
 		);
 	const reply = (state, extra) => {
-		if (state === "ok") saveLastGood(tripKey, extra);
+		if (state === "ok") {
+			console.log("fresh times for " + tripKey + ", saved");
+			saveLastGood(tripKey, extra);
+		}
 		if (STALE_FALLBACK_STATES.includes(state)) {
 			// Keep showing the last good times, flagged with why they're old:
 			// sent as "ok" plus staleReason/staleAge (and the pause length for
 			// a call-guard pause) -- see the watch's departureUpdate handler.
 			const stale = staleExtra(loadLastGood()[tripKey], Date.now());
+			console.log(
+				"stale fallback for " +
+					tripKey +
+					" (" +
+					state +
+					"): " +
+					(stale ? "age " + stale.staleAge + " min" : "nothing usable saved")
+			);
 			if (stale) {
 				stale.staleReason = state;
 				if (state === "rateLimited") stale.pauseMinutes = extra.minutes;

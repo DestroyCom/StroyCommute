@@ -446,6 +446,9 @@ const departureMessage = new Message({
 				? item.staleReason
 				: undefined;
 		const failure = staleReason || item.state;
+		console.log(
+			`departureUpdate ${item.state} stale=${staleReason} age=${item.staleAge} had=${previous ? previous.state : "none"}`
+		);
 		if (
 			previous &&
 			previous.state === "ok" &&
