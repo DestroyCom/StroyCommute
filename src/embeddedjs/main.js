@@ -14,6 +14,8 @@ const STRINGS = {
 		noRealtimeData: "No real-time data for this stop",
 		quotaExceeded: "API quota exceeded",
 		rateLimited: "Paused (call guard), back in {n} min",
+		pausedFor: "Call guard pause: {n} min",
+		updatedAgo: "Updated {n} min ago",
 		invalidKey: "Invalid API key",
 		invalidStop: "Invalid stop, re-add it in the settings",
 		cancelled: "Cancelled",
@@ -33,6 +35,8 @@ const STRINGS = {
 		noRealtimeData: "Pas de temps réel pour cet arrêt",
 		quotaExceeded: "Quota API dépassé",
 		rateLimited: "Pause anti-quota, reprise dans {n} min",
+		pausedFor: "Pause quota : {n} min",
+		updatedAgo: "Màj il y a {n} min",
 		invalidKey: "Clé API invalide",
 		invalidStop: "Arrêt invalide, ré-ajoute-le dans les réglages",
 		cancelled: "Supprimé",
@@ -422,7 +426,18 @@ const departureMessage = new Message({
 				renderCurrentScreen();
 			}, MIN_REFRESH_INDICATOR_MS - elapsed);
 		}
+		// During a call-guard pause, keep the last good times on screen
+		// (with their age, see buildDetailScreen) instead of replacing them
+		// with the bare pause message -- they're still the best information
+		// available. receivedAt stays the time those times arrived.
+		const previous = departures.get(key);
+		if (item.state === "rateLimited" && previous && previous.state === "ok") {
+			previous.pauseMinutes = item.minutes;
+			renderCurrentScreen();
+			return;
+		}
 		departures.set(key, {
+			receivedAt: Date.now(),
 			state: item.state,
 			line: item.lineName,
 			destination: item.destination,
@@ -463,7 +478,7 @@ const refreshQueue = [];
 // REFRESH_INDICATOR_TIMEOUT_MS so a dropped reply (this project has hit
 // real single-slot AppMessage drops before, see the comments around
 // departureMessage/flushRefreshQueue) doesn't leave the marker stuck
-// forever -- the 45s timer will mark it pending again on its own anyway.
+// forever -- the refresh timer will mark it pending again on its own anyway.
 const pendingRefreshStops = new Set();
 const REFRESH_INDICATOR_TIMEOUT_MS = 15000;
 
@@ -532,7 +547,7 @@ function flushRefreshQueue() {
 
 // PRIM replies that retrying can't fix (bad key, bad stop ref): automatic
 // refreshes (timer, screen switch) skip a stop in one of these states so it
-// doesn't burn the daily quota every 45s. Select still retries on demand,
+// doesn't burn the daily quota on every tick. Select still retries on demand,
 // and a new config clears `departures` (see onConfigReady below).
 const PERMANENT_ERROR_STATES = ["invalidKey", "invalidStop"];
 
@@ -544,8 +559,11 @@ const PERMANENT_ERROR_STATES = ["invalidKey", "invalidStop"];
  * currently looking at.
  * @param {boolean} [manual] - True for an explicit Select press, which
  *   retries even a stop in a PERMANENT_ERROR_STATES state.
+ * @param {boolean} [navigation] - True for an Up/Down screen switch, which
+ *   only fetches when the stop's data is older than REFRESH_INTERVAL_MS --
+ *   otherwise cycling through the screens spends a PRIM call per press.
  */
-function requestRefresh(manual) {
+function requestRefresh(manual, navigation) {
 	const item = buildItemList()[selectedIndex];
 	// Deliberately not `item?.type` -- confirmed on real hardware that this
 	// XS engine's optional-chaining support is broken here (a runtime "call:
@@ -555,6 +573,13 @@ function requestRefresh(manual) {
 	if (!item || item.type !== "stop") return;
 	const known = departures.get(departureKey(item));
 	if (!manual && known && PERMANENT_ERROR_STATES.includes(known.state)) {
+		return;
+	}
+	if (
+		navigation &&
+		known &&
+		Date.now() - known.receivedAt < REFRESH_INTERVAL_MS
+	) {
 		return;
 	}
 	// Merge, don't overwrite: if the previous round hasn't fully drained
@@ -568,7 +593,7 @@ function requestRefresh(manual) {
 	);
 	if (!alreadyQueued) refreshQueue.push(item);
 	// Only stamp the start time on the first queue for this stop -- a
-	// redundant requestRefresh() call (e.g. the 45s timer firing while a
+	// redundant requestRefresh() call (e.g. the refresh timer firing while a
 	// button-triggered refresh is still in flight) must not push the
 	// MIN_REFRESH_INDICATOR_MS floor further out.
 	if (!pendingRefreshStops.has(key)) {
@@ -585,10 +610,14 @@ function requestRefresh(manual) {
 	}, REFRESH_INDICATOR_TIMEOUT_MS);
 }
 
-/** Starts the 45s foreground departure-refresh timer, once. */
+// Upper end of the project's 30-60s refresh rule: the PRIM quota is the
+// scarce resource, and departures are only shown to the minute anyway.
+const REFRESH_INTERVAL_MS = 60000;
+
+/** Starts the foreground departure-refresh timer, once. */
 function startRefreshTimer() {
 	if (refreshTimer) return;
-	refreshTimer = setInterval(() => requestRefresh(false), 45000);
+	refreshTimer = setInterval(() => requestRefresh(false), REFRESH_INTERVAL_MS);
 }
 
 const previousOnConfigReady = onConfigReady;
@@ -607,7 +636,7 @@ onConfigReady = () => {
 	// departureUpdate or button press had happened yet to trigger a
 	// re-render). requestRefresh() kicks off the fetch for whichever item
 	// selectedIndex points to (item 0 on a fresh boot) immediately, rather
-	// than waiting for the 45s timer's first tick.
+	// than waiting for the refresh timer's first tick.
 	renderCurrentScreen();
 	requestRefresh();
 };
@@ -733,7 +762,8 @@ class MainBehavior extends Behavior {
 		if (items.length === 0) return;
 		selectedIndex = (selectedIndex + direction + items.length) % items.length;
 		renderCurrentScreen();
-		requestRefresh(); // fetch immediately for the newly-selected stop
+		// Fetch for the newly-selected stop, unless its data is still fresh.
+		requestRefresh(false, true);
 	}
 }
 
@@ -800,12 +830,42 @@ function buildDetailScreen() {
 	}
 
 	const lines = [];
+	const dep =
+		item.type === "stop" ? departures.get(departureKey(item)) : undefined;
+	// Last good times kept through a call-guard pause (see onReadable): the
+	// bottom of the screen says so, and how old they are, in place of the
+	// cycle hint. Age is computed watch-side (no timezone involved) and
+	// refreshed on every render, i.e. at least once per timer tick.
+	const paused = !!dep && typeof dep.pauseMinutes === "number";
+	if (paused) {
+		lines.push(
+			new Label(null, {
+				top: 178,
+				left: 8,
+				right: 8,
+				style: errorStyle,
+				string: t("pausedFor", dep.pauseMinutes),
+			})
+		);
+		lines.push(
+			new Label(null, {
+				top: 200,
+				left: 8,
+				right: 8,
+				style: rowStyle,
+				string: t(
+					"updatedAgo",
+					Math.floor((Date.now() - dep.receivedAt) / 60000)
+				),
+			})
+		);
+	}
 	// "Haut/bas pour changer" hint -- only shown when there's actually
 	// something to cycle to, at the bottom of the screen, below every other
 	// element this screen ever renders (board banner, destination, status,
 	// following-departure line all stay well above top:200 on Emery's
 	// 228px-tall display).
-	if (items.length > 1) {
+	if (items.length > 1 && !paused) {
 		lines.push(
 			new Label(null, {
 				top: 200,
@@ -819,7 +879,6 @@ function buildDetailScreen() {
 		);
 	}
 	if (item.type === "stop") {
-		const dep = departures.get(departureKey(item));
 		lines.push(
 			new Container(null, {
 				left: 0,
@@ -890,7 +949,8 @@ function buildDetailScreen() {
 			);
 		} else if (dep.state === "rateLimited") {
 			// Not a PERMANENT_ERROR_STATES entry: pkjs refuses cheaply until
-			// the pause ends, so the 45s timer must keep asking.
+			// the pause ends, so the refresh timer must keep asking. Only
+			// reached with no earlier good times to keep showing.
 			lines.push(
 				new Text(null, {
 					top: 60,
@@ -931,7 +991,7 @@ function buildDetailScreen() {
 					? t("atStop")
 					: `${dep.minutes} min`;
 			// Spinner refresh marker: a refreshStop for this stop is in flight
-			// (button press, screen switch, or the 45s timer) but hasn't
+			// (button press, screen switch, or the refresh timer) but hasn't
 			// replied yet. Appended to the already-rendered status rather than
 			// a separate element, to avoid disturbing this screen's tight
 			// vertical layout (see the top: offsets throughout this function).

@@ -22,8 +22,9 @@ Mobilités API.
 - **Clear error states** on the watch: network error, invalid API key,
   invalid stop, quota exceeded, and stops with no real-time data.
 - **Quota-aware**: refreshes only the stop on screen, only while the app is
-  open in the foreground, every 45 s (or on demand with Select). A local
-  counter shows how many PRIM requests are left today.
+  open in the foreground, every 60 s (or on demand with Select). Switching
+  screens only fetches when the data is over a minute old. A local counter
+  shows how many PRIM requests are left today.
 - **English and French.** The app follows your watch's language by default;
   you can force one in the settings.
 - **Your API key stays on your phone.** It is never sent to the watch.
@@ -75,7 +76,7 @@ The last screen shows the remaining PRIM quota for the day.
 
 ```
 ┌──────────── Watch (embeddedjs) ────────────┐        ┌────────────── Phone (pkjs) ──────────────┐
-│ Piu UI, 45 s foreground-only timer         │        │ Config page (webview), localStorage      │
+│ Piu UI, 60 s foreground-only timer         │        │ Config page (webview), localStorage      │
 │                                            │        │                                          │
 │  refreshStop {stopRef, lineRef} ───────────┼──────► │  GET PRIM stop-monitoring (API key here) │
 │                                            │        │  parse SIRI Lite, filter, sort,          │

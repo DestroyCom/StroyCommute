@@ -1671,9 +1671,7 @@ function handleRefreshStop(request) {
 		return;
 	}
 
-	const refs = destStopRef
-		? [request.stopRef, destStopRef]
-		: [request.stopRef];
+	const refs = destStopRef ? [request.stopRef, destStopRef] : [request.stopRef];
 	// Configs saved before the monomodalStopPlace fix (see idfmIdToStif in
 	// CONFIG_HTML) carry a ref with no numeric id -- PRIM can only reject it.
 	if (refs.some((ref) => /:monomodalStopPlace:$/.test(ref))) {

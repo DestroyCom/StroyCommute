@@ -153,7 +153,12 @@ pkjs has full `Intl`/`Date` support (embeddedjs doesn't).
   defaults 40/10/15, N = 0 disables), pkjs makes no PRIM call for P
   minutes (`decideCallGuard` in `src/pkjs/trips.js`, state persisted as
   `stroycommuteCallGuard`). Not a permanent error: the watch keeps asking
-  every 45s and recovers when the pause ends.
+  every 60s and recovers when the pause ends. If it already had "ok" times
+  for that trip, it keeps showing them with the pause length and their age
+  ("Màj il y a N min", computed watch-side) instead of the bare pause
+  message.
+- Refresh triggers (watch): 60s timer, Select (always), Up/Down screen
+  switch (only when that trip's data is over 60s old).
 
 ## Before generating code
 
