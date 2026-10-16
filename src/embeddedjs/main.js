@@ -426,15 +426,26 @@ const departureMessage = new Message({
 				renderCurrentScreen();
 			}, MIN_REFRESH_INDICATOR_MS - elapsed);
 		}
-		// During a call-guard pause, keep the last good times on screen
-		// (with their age, see buildDetailScreen) instead of replacing them
-		// with the bare pause message -- they're still the best information
-		// available. receivedAt stays the time those times arrived.
+		// During a call-guard pause, a network failure or an exceeded quota,
+		// keep the last good times on screen (with their age and the reason,
+		// see buildDetailScreen) instead of replacing them with a bare error
+		// message -- they're still the best information available. receivedAt
+		// stays the time those times arrived; the next good reply replaces
+		// the whole entry, which clears the marker.
 		const previous = departures.get(key);
-		if (item.state === "rateLimited" && previous && previous.state === "ok") {
-			previous.pauseMinutes = item.minutes;
-			renderCurrentScreen();
-			return;
+		if (previous && previous.state === "ok") {
+			if (item.state === "rateLimited") {
+				previous.pauseMinutes = item.minutes;
+				previous.staleReason = undefined;
+				renderCurrentScreen();
+				return;
+			}
+			if (item.state === "network" || item.state === "quotaExceeded") {
+				previous.pauseMinutes = undefined;
+				previous.staleReason = item.state;
+				renderCurrentScreen();
+				return;
+			}
 		}
 		departures.set(key, {
 			receivedAt: Date.now(),
@@ -837,14 +848,17 @@ function buildDetailScreen() {
 	// cycle hint. Age is computed watch-side (no timezone involved) and
 	// refreshed on every render, i.e. at least once per timer tick.
 	const paused = !!dep && typeof dep.pauseMinutes === "number";
-	if (paused) {
+	// Same bottom banner when the last good times are kept through a network
+	// error or an exceeded quota: staleReason is that error's STRINGS key.
+	const stale = !!dep && typeof dep.staleReason === "string";
+	if (paused || stale) {
 		lines.push(
 			new Label(null, {
 				top: 178,
 				left: 8,
 				right: 8,
 				style: errorStyle,
-				string: t("pausedFor", dep.pauseMinutes),
+				string: paused ? t("pausedFor", dep.pauseMinutes) : t(dep.staleReason),
 			})
 		);
 		lines.push(
@@ -865,7 +879,7 @@ function buildDetailScreen() {
 	// element this screen ever renders (board banner, destination, status,
 	// following-departure line all stay well above top:200 on Emery's
 	// 228px-tall display).
-	if (items.length > 1 && !paused) {
+	if (items.length > 1 && !paused && !stale) {
 		lines.push(
 			new Label(null, {
 				top: 200,

@@ -22,6 +22,8 @@ Mobilités API.
 - **Official line colors** on each departure board.
 - **Clear error states** on the watch: network error, invalid API key,
   invalid stop, quota exceeded, and stops with no real-time data.
+  If the network drops or the quota runs out while you already have times
+  on screen, the watch keeps them and shows the error plus how old they are.
 - **Quota-aware**: refreshes only the stop on screen, only while the app is
   open in the foreground, every 60 s (or on demand with Select). Switching
   screens only fetches when the data is over a minute old. A local counter
