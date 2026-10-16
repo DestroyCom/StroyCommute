@@ -1,6 +1,66 @@
 import Message from "pebble/message";
 
-console.log("Hello, Watchface.");
+// --- UI strings (fr/en) ---
+// The language is resolved phone-side (config page choice, or the watch's
+// own language via Pebble.getActiveWatchInfo() on "auto") and arrives in
+// configMeta. English until then -- only the boot-time "Loading..." is
+// ever shown before the first configMeta.
+const STRINGS = {
+	en: {
+		loading: "Loading...",
+		noStops: "No stop configured",
+		cycleHint: "Up / Down to switch",
+		network: "Network error",
+		noRealtimeData: "No real-time data for this stop",
+		quotaExceeded: "API quota exceeded",
+		rateLimited: "Paused (call guard), back in {n} min",
+		pausedFor: "Call guard pause: {n} min",
+		updatedAgo: "Updated {n} min ago",
+		invalidKey: "Invalid API key",
+		invalidStop: "Invalid stop, re-add it in the settings",
+		cancelled: "Cancelled",
+		atStop: "At platform",
+		towards: "To",
+		thenLabel: "Then",
+		settings: "Settings",
+		quotaRemaining: "PRIM quota: {n} left",
+		quotaUnknown: "PRIM quota: unknown",
+		alertsSoon: "Traffic alerts coming soon",
+	},
+	fr: {
+		loading: "Chargement...",
+		noStops: "Aucun arrêt configuré",
+		cycleHint: "Haut / Bas pour changer",
+		network: "Erreur réseau",
+		noRealtimeData: "Pas de temps réel pour cet arrêt",
+		quotaExceeded: "Quota API dépassé",
+		rateLimited: "Pause anti-quota, reprise dans {n} min",
+		pausedFor: "Pause quota : {n} min",
+		updatedAgo: "Màj il y a {n} min",
+		invalidKey: "Clé API invalide",
+		invalidStop: "Arrêt invalide, ré-ajoute-le dans les réglages",
+		cancelled: "Supprimé",
+		atStop: "À quai",
+		towards: "Vers",
+		thenLabel: "Puis",
+		settings: "Réglages",
+		quotaRemaining: "Quota PRIM : {n} restant(s)",
+		quotaUnknown: "Quota PRIM : inconnu",
+		alertsSoon: "Alertes trafic bientôt disponibles",
+	},
+};
+let language = "en";
+
+/**
+ * @param {string} key - A STRINGS entry.
+ * @param {number|string} [n] - Replaces "{n}" in the string, if any.
+ * @returns {string} The string in the current language.
+ */
+function t(key, n) {
+	const table = STRINGS[language] || STRINGS.en;
+	const str = table[key] || STRINGS.en[key] || key;
+	return n === undefined ? str : str.replace("{n}", String(n));
+}
 
 // --- Config state ---
 // Populated from AppMessage items sent by pkjs's sendConfigToWatch() (see
@@ -72,6 +132,11 @@ const ALL_MESSAGE_KEYS = [
 	"lineTextColor",
 	"minutes2",
 	"quotaRemaining",
+	"language",
+	"destStopRef",
+	"destStopName",
+	"mission",
+	"mission2",
 ];
 const MESSAGE_KEY_CODES = new Map(
 	ALL_MESSAGE_KEYS.map((key, index) => [key, 10000 + index])
@@ -116,6 +181,9 @@ const configMessageKeys = [
 	"stopName",
 	"lineColor",
 	"lineTextColor",
+	"language",
+	"destStopRef",
+	"destStopName",
 ];
 
 const configMessage = new Message({
@@ -227,6 +295,7 @@ function handleConfigItem(item) {
 		scheduleStartMinutes = item.scheduleStartMinutes;
 		scheduleEndMinutes = item.scheduleEndMinutes;
 		timelineEnabled = !!item.timelineEnabled;
+		if (STRINGS[item.language]) language = item.language;
 		pendingConfigCount = item.itemCount;
 		pendingStops = [];
 		pendingLines = [];
@@ -239,6 +308,8 @@ function handleConfigItem(item) {
 			stopName: item.stopName,
 			lineColor: item.lineColor || "#888888",
 			lineTextColor: item.lineTextColor || "#ffffff",
+			destStopRef: item.destStopRef || "",
+			destStopName: item.destStopName || "",
 		});
 	} else if (item.itemType === "configLine") {
 		pendingLines.push({ lineRef: item.lineRef, lineName: item.lineName });
@@ -286,6 +357,18 @@ function handleConfigItem(item) {
 
 const departures = new Map();
 
+/**
+ * Key for `departures` and the pending-refresh maps. stopRef alone isn't
+ * unique: a stop area (RER/Transilien, `STIF:StopArea:SP:...`) is shared by
+ * every line calling there, and one stop+line can be tracked towards
+ * several arrival stops.
+ * @param {{stopRef: string, lineRef: string, destStopRef?: string}} item
+ * @returns {string}
+ */
+function departureKey(item) {
+	return `${item.stopRef}|${item.lineRef}|${item.destStopRef || ""}`;
+}
+
 // Latest known PRIM quota remaining, shown on the settings screen. Global
 // (not per-stop) -- pkjs attaches it to every departureUpdate it sends
 // (see sendDepartureUpdate in src/pkjs/index.js), so this just tracks
@@ -304,6 +387,9 @@ const departureMessageKeys = [
 	"cancelled",
 	"minutes2",
 	"quotaRemaining",
+	"destStopRef",
+	"mission",
+	"mission2",
 ];
 
 // Same Message instance handles both directions of this protocol (receive
@@ -327,20 +413,31 @@ const departureMessage = new Message({
 		// spinner's disappearance is held back, so a fast PRIM reply doesn't
 		// flash the spinner for a single frame and read as a glitch (see
 		// MIN_REFRESH_INDICATOR_MS above).
-		const startedAt = pendingRefreshStartedAt.get(item.stopRef);
+		const key = departureKey(item);
+		const startedAt = pendingRefreshStartedAt.get(key);
 		const elapsed = startedAt
 			? Date.now() - startedAt
 			: MIN_REFRESH_INDICATOR_MS;
-		const stopRef = item.stopRef;
 		if (elapsed >= MIN_REFRESH_INDICATOR_MS) {
-			clearPendingRefresh(stopRef);
+			clearPendingRefresh(key);
 		} else {
 			setTimeout(() => {
-				clearPendingRefresh(stopRef);
+				clearPendingRefresh(key);
 				renderCurrentScreen();
 			}, MIN_REFRESH_INDICATOR_MS - elapsed);
 		}
-		departures.set(item.stopRef, {
+		// During a call-guard pause, keep the last good times on screen
+		// (with their age, see buildDetailScreen) instead of replacing them
+		// with the bare pause message -- they're still the best information
+		// available. receivedAt stays the time those times arrived.
+		const previous = departures.get(key);
+		if (item.state === "rateLimited" && previous && previous.state === "ok") {
+			previous.pauseMinutes = item.minutes;
+			renderCurrentScreen();
+			return;
+		}
+		departures.set(key, {
+			receivedAt: Date.now(),
 			state: item.state,
 			line: item.lineName,
 			destination: item.destination,
@@ -348,6 +445,8 @@ const departureMessage = new Message({
 			minutes2: item.minutes2, // undefined when there's no following departure
 			atStop: !!item.atStop,
 			cancelled: !!item.cancelled,
+			mission: item.mission || "",
+			mission2: item.mission2 || "",
 		});
 		renderCurrentScreen();
 	},
@@ -373,27 +472,27 @@ const departureMessage = new Message({
 let refreshTimer = null;
 const refreshQueue = [];
 
-// stopRefs with a refreshStop request in flight -- drives the spinner
+// departureKey()s with a refreshStop request in flight -- drives the spinner
 // marker appended to the status line in buildDetailScreen. Cleared on the
 // matching departureUpdate; also auto-cleared after
 // REFRESH_INDICATOR_TIMEOUT_MS so a dropped reply (this project has hit
 // real single-slot AppMessage drops before, see the comments around
 // departureMessage/flushRefreshQueue) doesn't leave the marker stuck
-// forever -- the 45s timer will mark it pending again on its own anyway.
+// forever -- the refresh timer will mark it pending again on its own anyway.
 const pendingRefreshStops = new Set();
 const REFRESH_INDICATOR_TIMEOUT_MS = 15000;
 
-// stopRef -> Date.now() when its refresh started -- lets the departureUpdate
+// departureKey() -> Date.now() when its refresh started -- lets the departureUpdate
 // handler enforce MIN_REFRESH_INDICATOR_MS below even when PRIM replies
 // almost instantly (a fast reply flashing the spinner for one frame reads
 // as a glitch rather than a real refresh).
 const pendingRefreshStartedAt = new Map();
 const MIN_REFRESH_INDICATOR_MS = 1500;
 
-/** Clears both pending-refresh maps for `stopRef` in one place. */
-function clearPendingRefresh(stopRef) {
-	pendingRefreshStops.delete(stopRef);
-	pendingRefreshStartedAt.delete(stopRef);
+/** Clears both pending-refresh maps for `key` (a departureKey()) in one place. */
+function clearPendingRefresh(key) {
+	pendingRefreshStops.delete(key);
+	pendingRefreshStartedAt.delete(key);
 }
 
 // Plain-ASCII spinner (not a real icon glyph -- Gothic bitmap font lacks
@@ -418,7 +517,8 @@ function startSpinnerTimer() {
 
 /**
  * Attempts one `refreshStop` write for `stop`.
- * @param {{stopRef: string, lineRef: string, lineName: string}} stop
+ * @param {{stopRef: string, lineRef: string, lineName: string,
+ *   destStopRef?: string}} stop
  * @returns {boolean} True if the write succeeded (outbound slot was free).
  */
 function tryWriteRefreshStop(stop) {
@@ -427,6 +527,8 @@ function tryWriteRefreshStop(stop) {
 	m.set("stopRef", stop.stopRef);
 	m.set("lineRef", stop.lineRef);
 	m.set("lineName", stop.lineName);
+	// Omitted when empty, never sent as "" (see pkjs sendConfigToWatch).
+	if (stop.destStopRef) m.set("destStopRef", stop.destStopRef);
 	try {
 		departureMessage.write(m);
 		return true;
@@ -443,14 +545,25 @@ function flushRefreshQueue() {
 	}
 }
 
+// PRIM replies that retrying can't fix (bad key, bad stop ref): automatic
+// refreshes (timer, screen switch) skip a stop in one of these states so it
+// doesn't burn the daily quota on every tick. Select still retries on demand,
+// and a new config clears `departures` (see onConfigReady below).
+const PERMANENT_ERROR_STATES = ["invalidKey", "invalidStop"];
+
 /**
  * Queues a refreshStop for the currently-selected stop, if any, then
  * flushes. A no-op for the "alert" item type (not PRIM data). Scoping to
  * just the viewed stop, instead of every tracked stop, is deliberate: no
  * reason to spend PRIM quota / Bluetooth traffic on stops the user isn't
  * currently looking at.
+ * @param {boolean} [manual] - True for an explicit Select press, which
+ *   retries even a stop in a PERMANENT_ERROR_STATES state.
+ * @param {boolean} [navigation] - True for an Up/Down screen switch, which
+ *   only fetches when the stop's data is older than REFRESH_INTERVAL_MS --
+ *   otherwise cycling through the screens spends a PRIM call per press.
  */
-function requestRefresh() {
+function requestRefresh(manual, navigation) {
 	const item = buildItemList()[selectedIndex];
 	// Deliberately not `item?.type` -- confirmed on real hardware that this
 	// XS engine's optional-chaining support is broken here (a runtime "call:
@@ -458,43 +571,61 @@ function requestRefresh() {
 	// switching this exact line to `?.`). Do not "simplify" this back.
 	// biome-ignore lint/complexity/useOptionalChain: see comment above
 	if (!item || item.type !== "stop") return;
+	const known = departures.get(departureKey(item));
+	if (!manual && known && PERMANENT_ERROR_STATES.includes(known.state)) {
+		return;
+	}
+	if (
+		navigation &&
+		known &&
+		Date.now() - known.receivedAt < REFRESH_INTERVAL_MS
+	) {
+		return;
+	}
 	// Merge, don't overwrite: if the previous round hasn't fully drained
 	// (e.g. a Bluetooth stall keeps the single outbound slot busy across a
 	// tick boundary), discarding a still-pending entry here would silently
-	// drop it. Dedup by stopRef so re-queuing the same viewed stop every
-	// tick doesn't pile up duplicates.
+	// drop it. Dedup by departureKey so re-queuing the same viewed stop
+	// every tick doesn't pile up duplicates.
+	const key = departureKey(item);
 	const alreadyQueued = refreshQueue.some(
-		(queued) => queued.stopRef === item.stopRef
+		(queued) => departureKey(queued) === key
 	);
 	if (!alreadyQueued) refreshQueue.push(item);
 	// Only stamp the start time on the first queue for this stop -- a
-	// redundant requestRefresh() call (e.g. the 45s timer firing while a
+	// redundant requestRefresh() call (e.g. the refresh timer firing while a
 	// button-triggered refresh is still in flight) must not push the
 	// MIN_REFRESH_INDICATOR_MS floor further out.
-	if (!pendingRefreshStops.has(item.stopRef)) {
-		pendingRefreshStartedAt.set(item.stopRef, Date.now());
+	if (!pendingRefreshStops.has(key)) {
+		pendingRefreshStartedAt.set(key, Date.now());
 	}
-	pendingRefreshStops.add(item.stopRef);
+	pendingRefreshStops.add(key);
 	renderCurrentScreen(); // shows the spinner marker immediately
 	flushRefreshQueue();
-	const stopRef = item.stopRef;
 	setTimeout(() => {
-		if (pendingRefreshStops.has(stopRef)) {
-			clearPendingRefresh(stopRef);
+		if (pendingRefreshStops.has(key)) {
+			clearPendingRefresh(key);
 			renderCurrentScreen();
 		}
 	}, REFRESH_INDICATOR_TIMEOUT_MS);
 }
 
-/** Starts the 45s foreground departure-refresh timer, once. */
+// Upper end of the project's 30-60s refresh rule: the PRIM quota is the
+// scarce resource, and departures are only shown to the minute anyway.
+const REFRESH_INTERVAL_MS = 60000;
+
+/** Starts the foreground departure-refresh timer, once. */
 function startRefreshTimer() {
 	if (refreshTimer) return;
-	refreshTimer = setInterval(requestRefresh, 45000);
+	refreshTimer = setInterval(() => requestRefresh(false), REFRESH_INTERVAL_MS);
 }
 
 const previousOnConfigReady = onConfigReady;
 onConfigReady = () => {
 	previousOnConfigReady();
+	// A new config may have fixed the API key or the stop -- forget every
+	// known state, permanent errors included (see PERMANENT_ERROR_STATES).
+	departures.clear();
 	startRefreshTimer();
 	// renderCurrentScreen()/requestRefresh() are declared further down
 	// (hoisted `function`s, so this forward reference resolves fine).
@@ -505,7 +636,7 @@ onConfigReady = () => {
 	// departureUpdate or button press had happened yet to trigger a
 	// re-render). requestRefresh() kicks off the fetch for whichever item
 	// selectedIndex points to (item 0 on a fresh boot) immediately, rather
-	// than waiting for the 45s timer's first tick.
+	// than waiting for the refresh timer's first tick.
 	renderCurrentScreen();
 	requestRefresh();
 };
@@ -548,6 +679,8 @@ function buildItemList() {
 			stopName: stop.stopName,
 			lineColor: stop.lineColor,
 			lineTextColor: stop.lineTextColor,
+			destStopRef: stop.destStopRef,
+			destStopName: stop.destStopName,
 		});
 	}
 	for (const line of alertLines) {
@@ -616,7 +749,7 @@ class MainBehavior extends Behavior {
 		// this exact pattern (broken optional-chaining on this XS engine).
 		// biome-ignore lint/complexity/useOptionalChain: see comment above
 		if (!item || item.type !== "stop") return true;
-		requestRefresh();
+		requestRefresh(true);
 		return true;
 	}
 	onReleaseSelect() {
@@ -629,7 +762,8 @@ class MainBehavior extends Behavior {
 		if (items.length === 0) return;
 		selectedIndex = (selectedIndex + direction + items.length) % items.length;
 		renderCurrentScreen();
-		requestRefresh(); // fetch immediately for the newly-selected stop
+		// Fetch for the newly-selected stop, unless its data is still fresh.
+		requestRefresh(false, true);
 	}
 }
 
@@ -689,19 +823,49 @@ function buildDetailScreen() {
 					left: 8,
 					right: 8,
 					style: rowStyle,
-					string: configLoaded ? "Aucun arrêt configuré" : "Chargement...",
+					string: configLoaded ? t("noStops") : t("loading"),
 				}),
 			],
 		});
 	}
 
 	const lines = [];
+	const dep =
+		item.type === "stop" ? departures.get(departureKey(item)) : undefined;
+	// Last good times kept through a call-guard pause (see onReadable): the
+	// bottom of the screen says so, and how old they are, in place of the
+	// cycle hint. Age is computed watch-side (no timezone involved) and
+	// refreshed on every render, i.e. at least once per timer tick.
+	const paused = !!dep && typeof dep.pauseMinutes === "number";
+	if (paused) {
+		lines.push(
+			new Label(null, {
+				top: 178,
+				left: 8,
+				right: 8,
+				style: errorStyle,
+				string: t("pausedFor", dep.pauseMinutes),
+			})
+		);
+		lines.push(
+			new Label(null, {
+				top: 200,
+				left: 8,
+				right: 8,
+				style: rowStyle,
+				string: t(
+					"updatedAgo",
+					Math.floor((Date.now() - dep.receivedAt) / 60000)
+				),
+			})
+		);
+	}
 	// "Haut/bas pour changer" hint -- only shown when there's actually
 	// something to cycle to, at the bottom of the screen, below every other
 	// element this screen ever renders (board banner, destination, status,
 	// following-departure line all stay well above top:200 on Emery's
 	// 228px-tall display).
-	if (items.length > 1) {
+	if (items.length > 1 && !paused) {
 		lines.push(
 			new Label(null, {
 				top: 200,
@@ -710,12 +874,11 @@ function buildDetailScreen() {
 				style: rowStyle,
 				// Plain ASCII -- the Gothic bitmap font doesn't have glyphs
 				// for ▲▼, confirmed on real hardware (renders as tofu boxes).
-				string: "Haut / Bas pour changer",
+				string: t("cycleHint"),
 			})
 		);
 	}
 	if (item.type === "stop") {
-		const dep = departures.get(item.stopRef);
 		lines.push(
 			new Container(null, {
 				left: 0,
@@ -724,13 +887,17 @@ function buildDetailScreen() {
 				height: 44,
 				skin: new Skin({ fill: item.lineColor || "#888888" }),
 				contents: [
-					new Label(null, {
+					// Text (not Label) so a trip name can wrap onto 2 lines.
+					new Text(null, {
 						left: 8,
 						right: 8,
 						top: 0,
 						bottom: 0,
 						style: boardTitleStyle(item.lineTextColor),
-						string: `${item.lineName} — ${item.stopName}`,
+						// ASCII ">" -- Gothic has no arrow glyph (tofu, like ▲▼).
+						string: item.destStopName
+							? `${item.lineName} — ${item.stopName} > ${item.destStopName}`
+							: `${item.lineName} — ${item.stopName}`,
 					}),
 				],
 			})
@@ -757,7 +924,7 @@ function buildDetailScreen() {
 					left: 8,
 					right: 8,
 					style: errorStyle,
-					string: "Erreur réseau",
+					string: t("network"),
 				})
 			);
 		} else if (dep.state === "noRealtimeData") {
@@ -767,7 +934,7 @@ function buildDetailScreen() {
 					left: 8,
 					right: 8,
 					style: bodyStyle,
-					string: "Pas de temps réel pour cet arrêt",
+					string: t("noRealtimeData"),
 				})
 			);
 		} else if (dep.state === "quotaExceeded") {
@@ -777,21 +944,58 @@ function buildDetailScreen() {
 					left: 8,
 					right: 8,
 					style: errorStyle,
-					string: "Quota API dépassé",
+					string: t("quotaExceeded"),
+				})
+			);
+		} else if (dep.state === "rateLimited") {
+			// Not a PERMANENT_ERROR_STATES entry: pkjs refuses cheaply until
+			// the pause ends, so the refresh timer must keep asking. Only
+			// reached with no earlier good times to keep showing.
+			lines.push(
+				new Text(null, {
+					top: 60,
+					left: 8,
+					right: 8,
+					height: 44,
+					style: errorStyle,
+					string: t("rateLimited", dep.minutes),
+				})
+			);
+		} else if (dep.state === "invalidKey") {
+			lines.push(
+				new Label(null, {
+					top: 60,
+					left: 8,
+					right: 8,
+					style: errorStyle,
+					string: t("invalidKey"),
+				})
+			);
+		} else if (dep.state === "invalidStop") {
+			// Text (not Label) so it wraps, same reason as the destination
+			// line below.
+			lines.push(
+				new Text(null, {
+					top: 60,
+					left: 8,
+					right: 8,
+					height: 44,
+					style: errorStyle,
+					string: t("invalidStop"),
 				})
 			);
 		} else {
 			const status = dep.cancelled
-				? "Supprimé"
+				? t("cancelled")
 				: dep.atStop
-					? "À quai"
+					? t("atStop")
 					: `${dep.minutes} min`;
 			// Spinner refresh marker: a refreshStop for this stop is in flight
-			// (button press, screen switch, or the 45s timer) but hasn't
+			// (button press, screen switch, or the refresh timer) but hasn't
 			// replied yet. Appended to the already-rendered status rather than
 			// a separate element, to avoid disturbing this screen's tight
 			// vertical layout (see the top: offsets throughout this function).
-			const statusWithMarker = pendingRefreshStops.has(item.stopRef)
+			const statusWithMarker = pendingRefreshStops.has(departureKey(item))
 				? `${status} ${SPINNER_FRAMES[spinnerFrame]}`
 				: status;
 			lines.push(
@@ -806,7 +1010,9 @@ function buildDetailScreen() {
 					right: 8,
 					height: 44,
 					style: bodyStyle,
-					string: `Vers ${dep.destination}`,
+					string: dep.destination
+						? `${dep.mission ? `${dep.mission} - ` : ""}${t("towards")} ${dep.destination}`
+						: dep.mission,
 				})
 			);
 			lines.push(
@@ -827,7 +1033,7 @@ function buildDetailScreen() {
 						left: 8,
 						right: 8,
 						style: bodyStyle,
-						string: `Puis ${dep.minutes2} min`,
+						string: `${t("thenLabel")} ${dep.minutes2} min${dep.mission2 ? ` - ${dep.mission2}` : ""}`,
 					})
 				);
 			}
@@ -839,7 +1045,7 @@ function buildDetailScreen() {
 				left: 8,
 				right: 8,
 				style: titleStyle,
-				string: "Réglages",
+				string: t("settings"),
 			})
 		);
 		lines.push(
@@ -850,8 +1056,8 @@ function buildDetailScreen() {
 				style: bodyStyle,
 				string:
 					typeof quotaRemaining === "number"
-						? `Quota PRIM: ${quotaRemaining} restant(s)`
-						: "Quota PRIM: inconnu",
+						? t("quotaRemaining", quotaRemaining)
+						: t("quotaUnknown"),
 			})
 		);
 	} else {
@@ -870,7 +1076,7 @@ function buildDetailScreen() {
 				left: 8,
 				right: 8,
 				style: bodyStyle,
-				string: "Alertes trafic bientôt disponibles",
+				string: t("alertsSoon"),
 			})
 		);
 	}

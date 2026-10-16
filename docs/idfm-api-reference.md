@@ -41,6 +41,21 @@ representing the whole station.
 To find exact stop IDs: "Référentiel des arrêts" dataset on the IDFM data
 portal (`arrets.xls` file / equivalent dataset).
 
+**Open-data → PRIM id mapping** (what the config page's search returns,
+`arrets-lignes` dataset):
+
+- Metro/tram/bus stops are reference stops: `IDFM:<ArRId>` →
+  `STIF:StopPoint:Q:<ArRId>:` (one platform = one direction).
+- RER/Transilien (SNCF) stops are stop areas:
+  `IDFM:monomodalStopPlace:<ZdAId>` → `STIF:StopArea:SP:<ZdAId>:`. A stop
+  area returns **both directions mixed**, not necessarily in time order —
+  pkjs sorts the visits and, for an A→B trip, keeps only trains also
+  calling at the arrival stop (see "SNCF journey fields used for A→B
+  trips" below).
+- SNCF journeys don't always fill `MonitoredCall.DestinationDisplay` (can be
+  missing or empty): fall back to `MonitoredVehicleJourney.DestinationName`
+  then `DirectionName`.
+
 ## Response structure (real example)
 
 Query: `stop-monitoring?MonitoringRef=STIF:StopPoint:Q:463158:`
@@ -93,6 +108,27 @@ Query: `stop-monitoring?MonitoringRef=STIF:StopPoint:Q:463158:`
 | `MonitoredVehicleJourney.MonitoredCall.ExpectedArrivalTime`                    | `minutes` (compute `(expectedArrival - now) / 60000`, rounded)   |
 | `MonitoredVehicleJourney.MonitoredCall.VehicleAtStop`                          | useful to show "at platform" instead of a number                 |
 | `MonitoredVehicleJourney.MonitoredCall.DepartureStatus`                        | `"cancelled"` = trip cancelled, filter out or display distinctly |
+
+## SNCF journey fields used for A→B trips (verified 2026-10-15)
+
+Present on RER/Transilien visits (`stop-monitoring` on a stop area), under
+`MonitoredVehicleJourney`:
+
+| Field                                             | Example                                                   | Use                       |
+| ------------------------------------------------- | --------------------------------------------------------- | ------------------------- |
+| `JourneyNote[0].value`                            | `"SCAL"`                                                  | mission code              |
+| `FramedVehicleJourneyRef.DatedVehicleJourneyRef`  | `"SNCF_MAGENTA_PRD:VehicleJourney::<uuid>:LOC"` (string)  | same train across stops   |
+| `TrainNumbers.TrainNumberRef[0].value`            | `"147491"`                                                | fallback train identity   |
+| `MonitoredCall.Order`                             | `14` (number)                                             | stop sequence in the trip |
+
+A train calling at A then B has the same `DatedVehicleJourneyRef` in both
+stops' responses and a higher `Order` at B; a train going the other way
+has a lower `Order` at B. Real captures (RER B, `LineRef=STIF:Line::C01743:`):
+`test/fixtures/sm-a.json` (Denfert-Rochereau, `STIF:StopArea:SP:473890:`)
+and `test/fixtures/sm-b.json` (Bourg-la-Reine, `STIF:StopArea:SP:43097:`)
+— southbound trains (Robinson, Saint-Rémy, Massy) go from A to B,
+northbound ones (Châtelet Les Halles) from B to A. Same SIRI producer
+(`SNCF_MAGENTA_PRD`) as RER C.
 
 ## Known gotchas
 

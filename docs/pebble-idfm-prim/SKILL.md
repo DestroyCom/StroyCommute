@@ -84,16 +84,31 @@ the exact item shapes.
 ## Watch <-> phone AppMessage format
 
 AppMessage now carries traffic in both directions:
-- **phone→watch (config)**: API key, tracked stops/lines, alert schedule
-  — sent once on config save and again on every pkjs `ready` (from
+- **phone→watch (config)**: tracked stops/lines, alert schedule, and
+  `language` (`"en"`/`"fr"`) in `configMeta`. With no config saved yet,
+  pkjs still sends a lone `configMeta` so the watch gets its language and
+  leaves "Loading...". Lines are not sent while `ALERTS_ENABLED` is false.
+  Sent once on config save and again on every pkjs `ready` (from
   persisted `localStorage`). See the spec above for the full
   `configMeta`/`configStop`/`configLine` item shapes.
-- **watch→phone (`refreshStop`)**: one item per tracked stop, sent by
-  embeddedjs's timer — `{itemType: "refreshStop", stopRef, lineRef,
-  lineName}`.
+- **watch→phone (`refreshStop`)**: one item for the currently viewed
+  trip, sent by embeddedjs's timer — `{itemType: "refreshStop", stopRef,
+  lineRef, lineName, destStopRef?}`.
 - **phone→watch (`departureUpdate`)**: pkjs's reply to each `refreshStop`
-  — `{itemType: "departureUpdate", stopRef, state, lineName, destination,
-  minutes, atStop, cancelled, quotaRemaining}`. `quotaRemaining` is a local
+  — `{itemType: "departureUpdate", stopRef, lineRef, destStopRef?, state,
+  lineName, destination, minutes, minutes2, atStop, cancelled, mission?,
+  mission2?, quotaRemaining}`. The watch keys departures by
+  `stopRef|lineRef|destStopRef` (a RER stop area is shared by several
+  lines, and one stop+line can be tracked towards several arrivals).
+  `configStop` carries optional `destStopRef`/`destStopName`. Optional
+  string fields are omitted when empty, never sent as `""`.
+- **A→B trips**: for a trip with an arrival stop, pkjs fires two
+  `stop-monitoring` requests in parallel (A and B) and keeps the A visits
+  whose train (same `DatedVehicleJourneyRef`, train-number fallback) calls
+  at B with a higher `Order` (time fallback). Pure logic in
+  `src/pkjs/trips.js`, unit-tested with `npm test` against the real
+  captures in `test/fixtures/`. `mission`/`mission2` come from
+  `JourneyNote` (see `docs/idfm-api-reference.md`). `quotaRemaining` is a local
   count of requests this app has made today against the documented daily
   quota (not a true server-side count -- PRIM exposes no such endpoint),
   attached to every reply regardless of `state` and shown on the watch's
@@ -125,10 +140,25 @@ pkjs has full `Intl`/`Date` support (embeddedjs doesn't).
   error state rather than a blank or stale screen with no indication.
 - A stop with no real-time data available (partial network coverage, per
   PRIM docs) → `state: "noRealtimeData"`, distinct from `"network"`.
+- HTTP 401/403 → `state: "invalidKey"`; HTTP 400/404 (or a stopRef saved
+  by the old, broken RER id conversion) → `state: "invalidStop"`. Only
+  real transport failures / other statuses / unparsable bodies are
+  `"network"`.
 - Quota exceeded (HTTP 429, checked via `xhr.status` in pkjs) →
-  `state: "quotaExceeded"`; the watch's 45s timer already rate-limits
-  requests, don't add a separate pkjs-side backoff on top without a
-  reason to.
+  `state: "quotaExceeded"`. For an A→B trip, when A and B fail
+  differently the most actionable state wins (quotaExceeded > invalidKey
+  > invalidStop > network).
+- PRIM call guard → `state: "rateLimited"`, `minutes` = pause minutes
+  left. After N calls within W minutes (config page, `callGuard`,
+  defaults 40/10/15, N = 0 disables), pkjs makes no PRIM call for P
+  minutes (`decideCallGuard` in `src/pkjs/trips.js`, state persisted as
+  `stroycommuteCallGuard`). Not a permanent error: the watch keeps asking
+  every 60s and recovers when the pause ends. If it already had "ok" times
+  for that trip, it keeps showing them with the pause length and their age
+  ("Màj il y a N min", computed watch-side) instead of the bare pause
+  message.
+- Refresh triggers (watch): 60s timer, Select (always), Up/Down screen
+  switch (only when that trip's data is over 60s old).
 
 ## Before generating code
 
