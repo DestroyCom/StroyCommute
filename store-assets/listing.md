@@ -1,6 +1,7 @@
 # Appstore listing text
 
-- **Name:** StroyCommute
+- **Name (store only):** StroyCommute - Paris metro, RER & tram times
+  (the watch and the .pbw keep the short name "StroyCommute")
 - **Category:** Tools & Utilities
 - **Website / Source code URL:** https://github.com/DestroyCom/StroyCommute
 - **Privacy policy:** https://github.com/DestroyCom/StroyCommute/blob/main/PRIVACY.md
