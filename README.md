@@ -65,6 +65,11 @@ Open the StroyCommute settings from the Pebble mobile app (gear icon), then:
 
 You can follow up to 8 items.
 
+> **Upgrading from an earlier version?** RER/Transilien stops saved before
+> this version used an identifier PRIM rejects (they always showed "Network
+> error"). The settings page flags them in red: remove them and add them
+> again.
+
 ### 3. On the watch
 
 | Button      | Action                                  |
@@ -81,7 +86,8 @@ The last screen shows the remaining PRIM quota for the day.
 ┌──────────── Watch (embeddedjs) ────────────┐        ┌────────────── Phone (pkjs) ──────────────┐
 │ Piu UI, 60 s foreground-only timer         │        │ Config page (webview), localStorage      │
 │                                            │        │                                          │
-│  refreshStop {stopRef, lineRef} ───────────┼──────► │  GET PRIM stop-monitoring (API key here) │
+│  refreshStop {stopRef, lineRef,            │        │  GET PRIM stop-monitoring (API key here) │
+│              destStopRef?} ────────────────┼──────► │                                          │
 │                                            │        │  parse SIRI Lite, filter, sort,          │
 │  ◄─────────── departureUpdate {state,      │ ◄──────┤  UTC → minutes                           │
 │               destination, minutes, ...}   │        │                                          │
@@ -98,7 +104,7 @@ The last screen shows the remaining PRIM quota for the day.
   real-hardware testing.
 - **Config page (`config/index.html`)**: stop/line search through the IDFM
   open-data `arrets-lignes` dataset, live API key check, and an arrival-stop
-  picker for RER stations.
+  picker for RER/Transilien stations.
 
 More detail lives in [`docs/`](docs/): the PRIM payload reference, the
 AppMessage protocol and Alloy pitfalls.
