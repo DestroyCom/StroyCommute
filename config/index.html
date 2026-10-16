@@ -48,6 +48,9 @@
   #itemCount { font-size: 0.9em; color: #999; }
   input[type="number"] { width: 100%; font-size: 16px; padding: 8px; border: 1px solid #444; border-radius: 4px; margin-top: 4px; background: #111; color: #eee; }
   .returnButton { background: #444; padding: 8px 10px; font-size: 13px; }
+  .moveButtons { display: flex; flex-direction: column; gap: 4px; }
+  .moveBtn { background: #444; padding: 2px 10px; font-size: 14px; line-height: 1.2; }
+  .moveBtn:disabled { opacity: 0.3; }
 </style>
 </head>
 <body>
@@ -163,6 +166,8 @@
       pickArrivalHint: "tu choisiras ton arrêt d'arrivée ensuite",
       stopsLegend: "Arrêts suivis (départs)",
       stopSearchPlaceholder: "Rechercher un arrêt (ex : Châtelet)",
+      moveUp: "Monter",
+      moveDown: "Descendre",
       linesLegend: "Lignes suivies (alertes trafic)",
       lineSearchPlaceholder: "Rechercher une ligne (ex : 4, RER A)",
       scheduleLegend: "Période de réception des alertes",
@@ -224,6 +229,8 @@
       pickArrivalHint: "you will pick your arrival stop next",
       stopsLegend: "Followed stops (departures)",
       stopSearchPlaceholder: "Search a stop (e.g. Châtelet)",
+      moveUp: "Move up",
+      moveDown: "Move down",
       linesLegend: "Followed lines (traffic alerts)",
       lineSearchPlaceholder: "Search a line (e.g. 4, RER A)",
       scheduleLegend: "Alert schedule",
@@ -1074,7 +1081,11 @@
       : "";
     div.innerHTML =
       '<span class="rowLabel"><span class="lineSwatch" style="background:' + escapeHtml(div.dataset.lineColor) + '"></span>' +
-      escapeHtml(values.lineName + " — " + values.stopName) + detail + '</span>' + returnButton +
+      escapeHtml(values.lineName + " — " + values.stopName) + detail + '</span>' +
+      '<span class="moveButtons">' +
+      '<button type="button" class="moveBtn" title="' + escapeHtml(t("moveUp")) + '" onclick="moveStopRow(this.parentElement.parentElement, -1)">↑</button>' +
+      '<button type="button" class="moveBtn" title="' + escapeHtml(t("moveDown")) + '" onclick="moveStopRow(this.parentElement.parentElement, 1)">↓</button>' +
+      '</span>' + returnButton +
       '<button type="button" class="remove" onclick="this.parentElement.remove(); updateCount();">x</button>';
     document.getElementById("stopsList").appendChild(div);
     updateCount();
@@ -1135,8 +1146,33 @@
     updateCount();
   }
 
+  /**
+   * Moves a followed stop up or down; the watch lists stops in this order.
+   * @param {Element} row - A .stopRow.
+   * @param {number} direction - -1 (up) or 1 (down).
+   */
+  function moveStopRow(row, direction) {
+    var sibling = direction < 0 ? row.previousElementSibling : row.nextElementSibling;
+    if (!sibling) return;
+    if (direction < 0) sibling.before(row);
+    else sibling.after(row);
+    updateMoveButtons();
+  }
+
+  /** Disables "up" on the first stop row and "down" on the last. */
+  function updateMoveButtons() {
+    var rows = document.querySelectorAll(".stopRow");
+    rows.forEach((row, i) => {
+      var buttons = row.querySelectorAll(".moveBtn");
+      if (buttons.length < 2) return;
+      buttons[0].disabled = i === 0;
+      buttons[1].disabled = i === rows.length - 1;
+    });
+  }
+
   /** Refreshes the "N / MAX_ITEMS items followed" counter text. */
   function updateCount() {
+    updateMoveButtons();
     var count = collectStops().length + collectLines().length;
     document.getElementById("itemCount").textContent = tf("itemCount", { count: count, max: MAX_ITEMS });
   }
