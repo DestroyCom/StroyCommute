@@ -1,11 +1,13 @@
 name: Release
 
 # Manual: Actions > Release > Run workflow (on main), pick the bump type.
-# Checks the code, bumps the version in package.json, builds the .pbw with
-# the pinned Pebble SDK, commits the bump, tags vX.Y.Z and attaches the .pbw
-# to a GitHub release. Then upload that .pbw in the Pebble Developer
-# Dashboard (app > New Release): the appstore refuses a version that was
-# already used, which is why every run bumps it first.
+# Checks the code, bumps the version in package.json, turns CHANGELOG.md's
+# [Unreleased] entries into this version's notes (scripts/release-notes.js),
+# builds the .pbw with the pinned Pebble SDK, commits and tags vX.Y.Z and
+# publishes a GitHub release with the .pbw and the notes, including a
+# plain-text version to paste into the appstore. Then upload that .pbw in
+# the Pebble Developer Dashboard (app > New Release): the appstore refuses a
+# version that was already used, which is why every run bumps it first.
 
 on:
   workflow_dispatch:
@@ -15,10 +17,6 @@ on:
         type: choice
         options: [patch, minor, major]
         default: patch
-      release_notes:
-        description: Release notes (also used for the GitHub release)
-        type: string
-        default: ""
 
 permissions:
   contents: write
@@ -38,6 +36,8 @@ jobs:
           exit 1
 
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags and history, for the commits since the last release
 
       - uses: pnpm/action-setup@v4
         with:
@@ -65,11 +65,14 @@ jobs:
             exit 1
           fi
           echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          # CHANGELOG.md's [Unreleased] -> [VERSION]; writes the release
+          # body and the store text to the runner's temp dir.
+          node scripts/release-notes.js "${VERSION}" --out "${RUNNER_TEMP}"
           # Committed and tagged now, pushed only once the build succeeded:
           # whatever the build touches (its own `npm install`) stays out.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore: release v${VERSION}" -- package.json package-lock.json
+          git commit -m "chore: release v${VERSION}" -- package.json package-lock.json CHANGELOG.md
           git tag -a "v${VERSION}" -m "v${VERSION}"
 
       - uses: ./.github/actions/setup-pebble
@@ -99,16 +102,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.bump.outputs.version }}
-          NOTES: ${{ inputs.release_notes }}
         run: |
           gh release create "v${VERSION}" "StroyCommute-${VERSION}.pbw" \
-            --title "v${VERSION}" \
-            --notes "${NOTES:-Release v${VERSION}}"
+            --title "StroyCommute v${VERSION}" \
+            --notes-file "${RUNNER_TEMP}/release-notes.md"
 
       - name: Summary
         env:
           VERSION: ${{ steps.bump.outputs.version }}
-          NOTES: ${{ inputs.release_notes }}
           RELEASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ steps.bump.outputs.version }}
         run: |
           {
@@ -116,9 +117,9 @@ jobs:
             echo
             echo "1. Download **StroyCommute-${VERSION}.pbw** from the [GitHub release](${RELEASE_URL}) (or this run's artifacts)."
             echo "2. Open the [Developer Dashboard](https://developer.repebble.com/dashboard) > StroyCommute > **New Release**."
-            echo "3. Upload the .pbw, paste the release notes below, click **Create Release**."
+            echo "3. Upload the .pbw, paste the text below as release notes, click **Create Release**."
             echo
-            echo '```'
-            echo "${NOTES:-Release v${VERSION}}"
+            echo '```text'
+            cat "${RUNNER_TEMP}/store-notes.txt"
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"

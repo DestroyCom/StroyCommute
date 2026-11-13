@@ -81,10 +81,21 @@
 				"name": "Internet",
 				"parameters": {
 					"domains": [
-						"data.iledefrance-mobilites.fr",
 						"prim.iledefrance-mobilites.fr"
 					]
-				}
+				},
+				"reason": "Pour récupérer les prochains passages en temps réel (API PRIM d'Île-de-France Mobilités)",
+				"required": true
+			},
+			{
+				"name": "Internet",
+				"parameters": {
+					"domains": [
+						"data.iledefrance-mobilites.fr"
+					]
+				},
+				"reason": "Pour chercher les arrêts et les lignes dans les réglages",
+				"required": true
 			}
 		]
 	},
