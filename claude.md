@@ -39,10 +39,15 @@ And the Pebble framework docs and reference:
 - `src/pkjs/` : phone code — config page open/persist, PRIM API fetch (via
   native `XMLHttpRequest`, no proxy needed — pkjs is close enough to a
   regular JS/Node environment for this) triggered by watch-sent
-  `refreshStop` requests, SIRI Lite parsing, UTC→minutes conversion,
-  Pebble Timeline pin push. `@moddable/pebbleproxy` wiring is still present
-  (Task 3) but currently unused by the departures feature — kept in case a
-  future feature needs embeddedjs-side networking.
+  `refreshStop` requests, SIRI Lite parsing, UTC→minutes conversion.
+  `@moddable/pebbleproxy` is **required** even though the watch makes no
+  network request itself: when the first `pebble/message` `Message` is
+  created, the watch sends a "ready" message (key 15025) and stays
+  unable to write (`write()` throws "not writable") until the phone sends
+  something back — the proxy's `readyReceived` is what answers it. Keep
+  `Pebble.addEventListener("ready", moddableProxy.readyReceived)` and the
+  `appMessageReceived` check (verified in the Moddable sources,
+  `build/devices/pebble/modules/message/pebble-appmessage.c`).
 - **PRIM fetch architecture** (revised 2026-08-18, see
   `.superpowers/sdd/2026-08-17-stroycommute-scaffold/progress.md`'s Task 7
   section for the full investigation): originally speced with `fetch()`
@@ -99,10 +104,15 @@ files under `/mnt/d`.
   embeddedjs (it's the only side that reliably knows the app is
   foregrounded) even though the actual fetch now happens in pkjs: the
   timer sends a `refreshStop` request per tracked stop, pkjs replies with
-  a `departureUpdate`. Do not move the timer to pkjs — pkjs runs whenever
-  the phone has Bluetooth connectivity, independent of whether this
-  watchapp is open, so a pkjs-side timer would poll PRIM in the background
-  and violate this rule.
+  a `departureUpdate`. Do not move the timer to pkjs: pkjs is started and
+  stopped with the watchapp, so it can't run anything while the app is
+  closed, and the watch side is what knows which stop is on screen.
+  Nothing of this app runs in the background: timeline pins
+  (`Pebble.insertTimelinePin`, local pins only — the timeline web API is
+  gone) and `Pebble.showSimpleNotificationOnPebble` only work while pkjs
+  runs, i.e. while the app is open. To do work at a given time with the app
+  closed, schedule a watch wakeup (`pebble/wakeup`), which relaunches the
+  app.
 - All date/time conversion (UTC → minutes remaining) happens in pkjs,
   since that's where the raw SIRI response now arrives (also matches
   `docs/idfm-api-reference.md`'s original note that this conversion
@@ -118,6 +128,31 @@ files under `/mnt/d`.
 - Explicitly handle these states on the watch side: data OK, network
   error, stop with no real-time data available (not an error), quota
   exceeded (HTTP 429).
+
+## Pinned tooling versions
+
+The Pebble SDK and `pebble-tool` versions used by CI and releases are
+pinned in `.github/actions/setup-pebble/action.yml` (`sdk-version`,
+`pebble-tool-version`), on purpose: an SDK update can change how the app
+behaves (SDK 4.44 started requiring `usesPermissions` for phone-side
+network access, without which PRIM requests are refused).
+
+Check for updates regularly — at the start of each session, and before
+preparing a release:
+
+- `pebble-tool`: latest on PyPI,
+  `curl -s https://pypi.org/pypi/pebble-tool/json | jq -r .info.version`.
+- SDK: `pebble sdk list` ("Available SDKs"), and the changelogs at
+  `https://developer.repebble.com/sdk/changelogs/<version>/`.
+
+When a newer version exists, tell the user (in French) without being
+asked: which version, what its changelog says, and your assessment — should
+we update now, later, or skip it, and why (fixes or features we'd use,
+breaking changes, new requirements on `package.json`, risk for the app on
+the watch). Don't update on your own. Once the user agrees: change the
+pinned version, run `pebble build` locally with that version and read the
+build warnings, run the CI build, and add a `CHANGELOG.md` entry only if
+users will notice the difference.
 
 ## Changelog
 
