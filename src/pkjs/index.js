@@ -1476,8 +1476,7 @@ function utf8ToBase64(str) {
  *   whatever config is currently persisted (if any).
  */
 function buildConfigDataUri() {
-	const stored = localStorage.getItem("stroycommuteConfig");
-	const initialConfig = stored ? JSON.parse(stored) : null;
+	const initialConfig = readJson("stroycommuteConfig", null);
 	const injected = JSON.stringify(initialConfig).replace(/</g, "\\u003c");
 	// Resolved here rather than from the webview's navigator.language so the
 	// page's "auto" matches what the watch shows (see resolveLanguage).
@@ -1505,6 +1504,22 @@ const { parseWatchDiag, mergeDiagEntries } = require("./diag");
 // exceptions, so a crash in the field can be read afterwards without a
 // debugger or a live `pebble logs`. Stays on the phone: nothing is uploaded.
 const DIAG_KEY = "stroycommuteDiag";
+
+/**
+ * @param {string} key - localStorage key holding JSON.
+ * @param {*} fallback - Returned when the key is missing or garbled.
+ * @returns {*} The parsed value. A corrupted entry would otherwise throw
+ *   in every handler that reads it, for good.
+ */
+function readJson(key, fallback) {
+	try {
+		const raw = localStorage.getItem(key);
+		return raw ? JSON.parse(raw) : fallback;
+	} catch (error) {
+		console.log(`garbled ${key} ignored: ${error}`);
+		return fallback;
+	}
+}
 
 /** @returns {object[]} Stored journal entries, [] if none/garbled. */
 function loadDiag() {
@@ -1606,9 +1621,9 @@ function resolveLanguage(choice) {
  * instead of waiting on a config that will never come.
  */
 function sendStoredConfigToWatch() {
-	const stored = localStorage.getItem("stroycommuteConfig");
+	const stored = storedConfig();
 	if (stored) {
-		sendConfigToWatch(JSON.parse(stored));
+		sendConfigToWatch(stored);
 		return;
 	}
 	sendItemsSequentially(
@@ -1676,14 +1691,16 @@ Pebble.addEventListener(
 
 /** @param {object} config - The config page's saved settings. */
 function saveConfig(config) {
-	const previous = localStorage.getItem("stroycommuteConfig");
-	const previousGuard = previous ? JSON.parse(previous).callGuard : undefined;
+	const previous = storedConfig();
+	const previousGuard = previous ? previous.callGuard : undefined;
 	// New guard settings apply right away: a pause started under the old
 	// ones would otherwise keep running (see callGuardSettingsChanged).
 	if (callGuardSettingsChanged(previousGuard, config.callGuard)) {
 		localStorage.removeItem("stroycommuteCallGuard");
 	}
 	localStorage.setItem("stroycommuteConfig", JSON.stringify(config));
+	pruneLastGood(config.trackedStops);
+	responseCache.clear(); // the API key may have changed
 	sendConfigToWatch(config);
 }
 
@@ -1715,7 +1732,8 @@ const ALERTS_ENABLED = false;
  * @param {object} config - Parsed stroycommuteConfig (apiKey, trackedStops,
  *   trackedLines, alertSchedule, timelineEnabled).
  */
-function sendConfigToWatch(config) {
+function sendConfigToWatch(rawConfig) {
+	const config = normalizeConfig(rawConfig);
 	// Traffic alerts aren't implemented yet (see ALERTS_ENABLED in
 	// CONFIG_HTML): lines saved by an older version would only show
 	// "coming soon" screens on the watch.
@@ -1910,8 +1928,7 @@ function todayUtc() {
  */
 function recordPrimRequestAndGetQuotaRemaining() {
 	const today = todayUtc();
-	const stored = localStorage.getItem("stroycommuteQuota");
-	let state = stored ? JSON.parse(stored) : null;
+	let state = readJson("stroycommuteQuota", null);
 	if (!state || state.date !== today) state = { date: today, count: 0 };
 	state.count += 1;
 	localStorage.setItem("stroycommuteQuota", JSON.stringify(state));
@@ -1944,8 +1961,26 @@ const STOP_MONITORING_URL =
 
 /** @returns {object|null} The persisted config, if any. */
 function storedConfig() {
-	const stored = localStorage.getItem("stroycommuteConfig");
-	return stored ? JSON.parse(stored) : null;
+	const config = readJson("stroycommuteConfig", null);
+	return config && typeof config === "object" ? config : null;
+}
+
+/**
+ * @param {object} config - A saved config, possibly from an older version.
+ * @returns {object} The same with every field sendConfigToWatch reads
+ *   present (configs saved before a field existed lack it).
+ */
+function normalizeConfig(config) {
+	const schedule = config.alertSchedule || {};
+	return Object.assign({}, config, {
+		trackedStops: Array.isArray(config.trackedStops) ? config.trackedStops : [],
+		trackedLines: Array.isArray(config.trackedLines) ? config.trackedLines : [],
+		alertSchedule: {
+			days: Array.isArray(schedule.days) ? schedule.days : [],
+			startTime: schedule.startTime || "07:00",
+			endTime: schedule.endTime || "19:30",
+		},
+	});
 }
 
 /**
@@ -1956,15 +1991,78 @@ function storedConfig() {
  * @returns {{allowed: boolean, minutesLeft: number}}
  */
 function checkCallGuard(config, count) {
-	const stored = localStorage.getItem("stroycommuteCallGuard");
 	const decision = decideCallGuard(
-		stored ? JSON.parse(stored) : null,
+		readJson("stroycommuteCallGuard", null),
 		config ? config.callGuard : undefined,
 		Date.now(),
 		count
 	);
 	localStorage.setItem("stroycommuteCallGuard", JSON.stringify(decision.state));
 	return decision;
+}
+
+// A PRIM request without an answer after this long counts as a network error.
+const PRIM_TIMEOUT_MS = 10000;
+
+// Recent stop-monitoring answers per "stopRef|lineRef", and the requests in
+// flight. A refresh asked again within RESPONSE_CACHE_MS (Select right
+// after the timer, two trips boarding at the same stop) reuses the answer
+// instead of spending another PRIM call; minutes are recomputed from the
+// cached times, so they stay right.
+const RESPONSE_CACHE_MS = 20000;
+const responseCache = new Map(); // key -> { at, visits }
+const inFlight = new Map(); // key -> callbacks waiting for the answer
+
+/** @returns {string} Key for responseCache/inFlight. */
+function visitsKey(ref, lineRef) {
+	return `${ref}|${lineRef}`;
+}
+
+/** @returns {?object[]} Visits answered less than RESPONSE_CACHE_MS ago. */
+function cachedVisits(ref, lineRef) {
+	const entry = responseCache.get(visitsKey(ref, lineRef));
+	return entry && Date.now() - entry.at < RESPONSE_CACHE_MS
+		? entry.visits
+		: null;
+}
+
+/** @returns {boolean} True when getStopVisits would make a PRIM call. */
+function needsFetch(ref, lineRef) {
+	return !cachedVisits(ref, lineRef) && !inFlight.has(visitsKey(ref, lineRef));
+}
+
+/**
+ * fetchStopVisits, sharing a recent answer or a request already in flight.
+ * @param {string} apiKey
+ * @param {string} ref
+ * @param {string} lineRef
+ * @param {function(string, object[]=): void} done
+ */
+function getStopVisits(apiKey, ref, lineRef, done) {
+	const key = visitsKey(ref, lineRef);
+	const cached = cachedVisits(ref, lineRef);
+	if (cached) {
+		done("ok", cached);
+		return;
+	}
+	const waiting = inFlight.get(key);
+	if (waiting) {
+		waiting.push(done);
+		return;
+	}
+	inFlight.set(key, [done]);
+	fetchStopVisits(apiKey, ref, lineRef, (state, visits) => {
+		const callbacks = inFlight.get(key) || [];
+		inFlight.delete(key);
+		if (state === "ok") responseCache.set(key, { at: Date.now(), visits });
+		for (const callback of callbacks) {
+			try {
+				callback(state, visits);
+			} catch (error) {
+				recordPhoneError("stop-monitoring callback", error);
+			}
+		}
+	});
 }
 
 /**
@@ -1984,16 +2082,37 @@ function fetchStopVisits(apiKey, stopRef, lineRef, done) {
 		"&LineRef=" +
 		encodeURIComponent(lineRef);
 	const xhr = new XMLHttpRequest();
+	// Exactly one answer per request: load, error or timeout, whichever
+	// comes first. A request that never answers would otherwise leave the
+	// watch without a reply.
+	let finished = false;
+	const timer = setTimeout(
+		guarded("stop-monitoring.timeout", () => {
+			try {
+				xhr.abort();
+			} catch (_error) {
+				// already over
+			}
+			finish("network");
+		}),
+		PRIM_TIMEOUT_MS
+	);
+	const finish = (state, visits) => {
+		if (finished) return;
+		finished = true;
+		clearTimeout(timer);
+		done(state, visits);
+	};
 	xhr.open("GET", url, true);
 	xhr.setRequestHeader("apiKey", apiKey);
 	xhr.onload = guarded("stop-monitoring.onload", () => {
-		if (xhr.status === 429) return done("quotaExceeded");
-		if (xhr.status === 401 || xhr.status === 403) return done("invalidKey");
+		if (xhr.status === 429) return finish("quotaExceeded");
+		if (xhr.status === 401 || xhr.status === 403) return finish("invalidKey");
 		if (xhr.status === 400 || xhr.status === 404) {
 			console.log(`stop-monitoring ${xhr.status} for ${stopRef}`);
-			return done("invalidStop");
+			return finish("invalidStop");
 		}
-		if (xhr.status < 200 || xhr.status >= 300) return done("network");
+		if (xhr.status < 200 || xhr.status >= 300) return finish("network");
 		let visits;
 		try {
 			visits =
@@ -2001,11 +2120,11 @@ function fetchStopVisits(apiKey, stopRef, lineRef, done) {
 					.StopMonitoringDelivery[0].MonitoredStopVisit || [];
 		} catch (error) {
 			console.log("stop-monitoring parse error: " + error);
-			return done("network");
+			return finish("network");
 		}
-		done("ok", visits);
+		finish("ok", visits);
 	});
-	xhr.onerror = guarded("stop-monitoring.onerror", () => done("network"));
+	xhr.onerror = guarded("stop-monitoring.onerror", () => finish("network"));
 	lastQuotaRemaining = recordPrimRequestAndGetQuotaRemaining();
 	xhr.send();
 }
@@ -2117,6 +2236,20 @@ function saveLastGood(tripKey, extra) {
 }
 
 /**
+ * Drops the saved times of trips that are no longer tracked.
+ * @param {object[]} trackedStops - The new config's trackedStops.
+ */
+function pruneLastGood(trackedStops) {
+	const all = loadLastGood();
+	const kept = {};
+	for (const stop of trackedStops || []) {
+		const key = [stop.stopRef, stop.lineRef, stop.destStopRef || ""].join("|");
+		if (all[key]) kept[key] = all[key];
+	}
+	localStorage.setItem(LAST_GOOD_KEY, JSON.stringify(kept));
+}
+
+/**
  * Handles a watch-sent `refreshStop`: one stop-monitoring request on A, or
  * two in parallel (A and B) for an A->B trip, kept to trains serving A then
  * B (filterVisitsServingStop). Replies with one `departureUpdate`.
@@ -2186,7 +2319,12 @@ function handleRefreshStop(request) {
 	}
 
 	const config = storedConfig();
-	const guard = checkCallGuard(config, refs.length);
+	// Only the calls that will really reach PRIM count against the guard.
+	const calls = refs.filter((ref) => needsFetch(ref, request.lineRef)).length;
+	const guard =
+		calls > 0
+			? checkCallGuard(config, calls)
+			: { allowed: true, minutesLeft: 0 };
 	if (!guard.allowed) {
 		reply("rateLimited", { minutes: guard.minutesLeft });
 		return;
@@ -2196,7 +2334,7 @@ function handleRefreshStop(request) {
 	const results = [];
 	let pending = refs.length;
 	refs.forEach((ref, i) => {
-		fetchStopVisits(apiKey, ref, request.lineRef, (state, visits) => {
+		getStopVisits(apiKey, ref, request.lineRef, (state, visits) => {
 			results[i] = { state: state, visits: visits };
 			pending -= 1;
 			if (pending > 0) return;
@@ -2244,5 +2382,31 @@ function sendDepartureUpdate(stopRef, lineRef, destStopRef, state, extra) {
 	// Attached to every reply regardless of state so the watch's settings
 	// screen always reflects the latest known count.
 	if (lastQuotaRemaining !== null) payload.quotaRemaining = lastQuotaRemaining;
-	Pebble.sendAppMessage(payload);
+	sendWithRetry(payload, DEPARTURE_SEND_RETRIES);
+}
+
+// A departureUpdate the watch didn't take (busy, Bluetooth hiccup) is sent
+// again a few times rather than lost until the next refresh.
+const DEPARTURE_SEND_RETRIES = 2;
+const DEPARTURE_RETRY_DELAY_MS = 500;
+
+/**
+ * @param {object} payload
+ * @param {number} retriesLeft
+ */
+function sendWithRetry(payload, retriesLeft) {
+	Pebble.sendAppMessage(
+		payload,
+		() => {},
+		() => {
+			if (retriesLeft <= 0) {
+				console.log(`${payload.itemType} not delivered, giving up`);
+				return;
+			}
+			setTimeout(
+				guarded("sendWithRetry", () => sendWithRetry(payload, retriesLeft - 1)),
+				DEPARTURE_RETRY_DELAY_MS
+			);
+		}
+	);
 }

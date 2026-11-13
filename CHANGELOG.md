@@ -17,10 +17,15 @@ version texte à coller dans le store.
 
 - Une erreur inattendue ne ferme plus l'application : elle est enregistrée et l'app continue de fonctionner.
 - Compatibilité avec les dernières versions de l'app Pebble : les accès réseau à PRIM et à la recherche d'arrêts IDFM sont déclarés.
+- Affichage plus léger sur la montre : l'écran n'est plus redessiné entièrement à chaque mise à jour, ce qui économise mémoire et batterie.
+- Moins d'appels à l'API PRIM : une même demande faite plusieurs fois en quelques secondes ne coûte plus qu'un appel sur ton quota.
 
 ### Corrections
 
 - Un envoi bloqué entre la montre et le téléphone ne peut plus figer les rafraîchissements.
+- Une requête PRIM qui ne répond pas affiche une erreur réseau au bout de 10 secondes au lieu de rester sans réponse.
+- Les horaires reçus par la montre sont renvoyés si elle était occupée, au lieu d'être perdus jusqu'au rafraîchissement suivant.
+- Des réglages enregistrés par une ancienne version ou abîmés n'empêchent plus l'app de démarrer.
 
 ## [1.0.0]
 
