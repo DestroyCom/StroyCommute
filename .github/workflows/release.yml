@@ -1,15 +1,17 @@
 name: Release
 
-# Manual: Actions > Release > Run workflow, pick the bump type.
-# Bumps package.json, builds the .pbw, tags vX.Y.Z and attaches the .pbw to
-# a GitHub release. Upload that .pbw in the Pebble Developer Dashboard
-# (app > New Release): the appstore needs a version that was never used.
+# Manual: Actions > Release > Run workflow (on main), pick the bump type.
+# Checks the code, bumps the version in package.json, builds the .pbw with
+# the pinned Pebble SDK, commits the bump, tags vX.Y.Z and attaches the .pbw
+# to a GitHub release. Then upload that .pbw in the Pebble Developer
+# Dashboard (app > New Release): the appstore refuses a version that was
+# already used, which is why every run bumps it first.
 
 on:
   workflow_dispatch:
     inputs:
       bump:
-        description: Version bump
+        description: Version bump (patch = fixes, minor = features)
         type: choice
         options: [patch, minor, major]
         default: patch
@@ -21,11 +23,22 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - name: Refuse to release from another branch than main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Run the Release workflow on main (it pushes the version bump there)."
+          exit 1
+
       - uses: actions/checkout@v4
+
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -40,40 +53,72 @@ jobs:
 
       - name: Bump version
         id: bump
+        env:
+          BUMP: ${{ inputs.bump }}
         run: |
-          npm version "${{ inputs.bump }}" --no-git-tag-version
-          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-
-      - uses: astral-sh/setup-uv@v5
-
-      # NOTE: SDK install steps are unverified in CI -- see PR/chat notes.
-      - name: Install Pebble SDK
-        run: |
-          uv tool install pebble-tool
-          pebble sdk install latest
-
-      - name: Build
-        run: |
-          pebble build
-          ls -l build/*.pbw
-          SIZE=$(stat -c %s build/*.pbw)
-          test "$SIZE" -le 4613734 || { echo "pbw exceeds the 4.4 MB appstore limit"; exit 1; }
-          cp build/*.pbw "StroyCommute-${{ steps.bump.outputs.version }}.pbw"
-
-      - name: Commit, tag and push
-        run: |
+          # Updates package.json and package-lock.json (which `pebble build`
+          # installs from); pnpm-lock.yaml doesn't record the version.
+          npm version "${BUMP}" --no-git-tag-version
+          VERSION="$(node -p "require('./package.json').version")"
+          if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+            echo "::error::Tag v${VERSION} already exists."
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          # Committed and tagged now, pushed only once the build succeeded:
+          # whatever the build touches (its own `npm install`) stays out.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "chore: release v${{ steps.bump.outputs.version }}"
-          git tag "v${{ steps.bump.outputs.version }}"
-          git push origin HEAD --follow-tags
+          git commit -m "chore: release v${VERSION}" -- package.json package-lock.json
+          git tag -a "v${VERSION}" -m "v${VERSION}"
+
+      - uses: ./.github/actions/setup-pebble
+
+      - name: Build the .pbw
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          pebble build
+          PBW="$(ls build/*.pbw)"  # named after the checkout directory
+          LABEL="$(node -p "require('./build/appinfo.json').versionLabel")"
+          test "${LABEL}" = "${VERSION}" || { echo "::error::.pbw version ${LABEL} != ${VERSION}"; exit 1; }
+          SIZE=$(stat -c %s "${PBW}")
+          test "${SIZE}" -le 4613734 || { echo "::error::.pbw is ${SIZE} bytes, over the 4.4 MB appstore limit"; exit 1; }
+          cp "${PBW}" "StroyCommute-${VERSION}.pbw"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StroyCommute-${{ steps.bump.outputs.version }}
+          path: StroyCommute-${{ steps.bump.outputs.version }}.pbw
+          if-no-files-found: error
+
+      - name: Push the version bump and tag
+        run: git push origin HEAD --follow-tags
 
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.bump.outputs.version }}
           NOTES: ${{ inputs.release_notes }}
         run: |
-          gh release create "v${{ steps.bump.outputs.version }}" \
-            "StroyCommute-${{ steps.bump.outputs.version }}.pbw" \
-            --title "v${{ steps.bump.outputs.version }}" \
-            --notes "${NOTES:-Release v${{ steps.bump.outputs.version }}}"
+          gh release create "v${VERSION}" "StroyCommute-${VERSION}.pbw" \
+            --title "v${VERSION}" \
+            --notes "${NOTES:-Release v${VERSION}}"
+
+      - name: Summary
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+          NOTES: ${{ inputs.release_notes }}
+          RELEASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ steps.bump.outputs.version }}
+        run: |
+          {
+            echo "## StroyCommute v${VERSION} is built"
+            echo
+            echo "1. Download **StroyCommute-${VERSION}.pbw** from the [GitHub release](${RELEASE_URL}) (or this run's artifacts)."
+            echo "2. Open the [Developer Dashboard](https://developer.repebble.com/dashboard) > StroyCommute > **New Release**."
+            echo "3. Upload the .pbw, paste the release notes below, click **Create Release**."
+            echo
+            echo '```'
+            echo "${NOTES:-Release v${VERSION}}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"

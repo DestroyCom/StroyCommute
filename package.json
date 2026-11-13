@@ -75,7 +75,18 @@
 					"file": "images/icon.png"
 				}
 			]
-		}
+		},
+		"usesPermissions": [
+			{
+				"name": "Internet",
+				"parameters": {
+					"domains": [
+						"data.iledefrance-mobilites.fr",
+						"prim.iledefrance-mobilites.fr"
+					]
+				}
+			}
+		]
 	},
 	"dependencies": {
 		"@moddable/pebbleproxy": "^0.1.0"
