@@ -136,6 +136,20 @@
     </div>
   </fieldset>
 
+  <fieldset>
+    <legend data-i18n="vibrateLegend">Vibration</legend>
+    <label for="vibrateMinutes" data-i18n="vibrateLabel">Vibrer quand le prochain départ est à :</label>
+    <select id="vibrateMinutes">
+      <option value="0" data-i18n="vibrateOff">Jamais</option>
+      <option value="1">1 min</option>
+      <option value="2">2 min</option>
+      <option value="3">3 min</option>
+      <option value="5">5 min</option>
+      <option value="10">10 min</option>
+    </select>
+    <div class="searchStatus" data-i18n="vibrateHint">Seulement quand l'app est ouverte sur l'arrêt concerné, une fois par départ.</div>
+  </fieldset>
+
   <!-- Error journal: filled from window.__diagLog (see buildConfigDataUri in
        src/pkjs/index.js). Stays on the phone; the user copies it by hand. -->
   <fieldset>
@@ -214,6 +228,10 @@
       guardWindow: "W (minutes)",
       guardPause: "P (pause, minutes)",
       guardInvalid: "Garde-fou : N doit être 0 ou au moins 2, W et P au moins 1.",
+      vibrateLegend: "Vibration",
+      vibrateLabel: "Vibrer quand le prochain départ est à :",
+      vibrateOff: "Jamais",
+      vibrateHint: "Seulement quand l'app est ouverte sur l'arrêt concerné, une fois par départ.",
       diagLegend: "Diagnostic",
       diagNone: "Aucune erreur enregistrée.",
       diagCount: "{n} erreur(s) enregistrée(s). En cas de souci, copie le journal et envoie-le au développeur.",
@@ -286,6 +304,10 @@
       guardWindow: "W (minutes)",
       guardPause: "P (pause, minutes)",
       guardInvalid: "Call guard: N must be 0 or at least 2, W and P at least 1.",
+      vibrateLegend: "Vibration",
+      vibrateLabel: "Vibrate when the next departure is:",
+      vibrateOff: "Never",
+      vibrateHint: "Only while the app is open on that stop, once per departure.",
       diagLegend: "Diagnostics",
       diagNone: "No error recorded.",
       diagCount: "{n} error(s) recorded. If something goes wrong, copy the log and send it to the developer.",
@@ -1355,6 +1377,7 @@
       },
       timelineEnabled: document.getElementById("timelineEnabled").checked,
       callGuard: callGuard,
+      vibrateMinutes: parseInt(document.getElementById("vibrateMinutes").value, 10) || 0,
       language: document.getElementById("language").value
     };
     var json = JSON.stringify(config);
@@ -1392,6 +1415,7 @@
       document.getElementById("scheduleEnd").value = initial.alertSchedule.endTime || "19:30";
     }
     document.getElementById("timelineEnabled").checked = !!initial.timelineEnabled;
+    document.getElementById("vibrateMinutes").value = String(initial.vibrateMinutes || 0);
     var guard = initial.callGuard || {};
     if (typeof guard.maxCalls === "number") document.getElementById("guardMaxCalls").value = guard.maxCalls;
     if (typeof guard.windowMinutes === "number") document.getElementById("guardWindow").value = guard.windowMinutes;

@@ -232,6 +232,7 @@ function staleExtra(saved, now) {
 }
 
 module.exports = {
+	callTimeMs: callTimeMs,
 	staleExtra: staleExtra,
 	filterVisitsServingStop: filterVisitsServingStop,
 	journeyMission: journeyMission,

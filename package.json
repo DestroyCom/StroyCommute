@@ -64,7 +64,10 @@
 			"staleReason",
 			"staleAge",
 			"pauseMinutes",
-			"diagText"
+			"diagText",
+			"departTime",
+			"departTime2",
+			"vibrateMinutes"
 		],
 		"resources": {
 			"media": [

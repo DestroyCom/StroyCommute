@@ -1,4 +1,5 @@
 import Message from "pebble/message";
+import Vibes from "pebble/vibes";
 
 // --- UI strings (fr/en) ---
 // The language is resolved phone-side (config page choice, or the watch's
@@ -26,6 +27,7 @@ const STRINGS = {
 		quotaRemaining: "PRIM quota: {n} left",
 		quotaUnknown: "PRIM quota: unknown",
 		alertsSoon: "Traffic alerts coming soon",
+		phoneDisconnected: "Phone disconnected",
 	},
 	fr: {
 		loading: "Chargement...",
@@ -47,6 +49,7 @@ const STRINGS = {
 		quotaRemaining: "Quota PRIM : {n} restant(s)",
 		quotaUnknown: "Quota PRIM : inconnu",
 		alertsSoon: "Alertes trafic bientôt disponibles",
+		phoneDisconnected: "Téléphone déconnecté",
 	},
 };
 let language = "en";
@@ -234,6 +237,9 @@ let alertLines = [];
 let configLoaded = false;
 // Received but not used yet: they belong to the traffic alerts.
 let schedule = { days: 0, startMinutes: 0, endMinutes: 0, timeline: false };
+// Vibrate when the next departure of the stop on screen gets this close, in
+// minutes (0 = off). Set on the config page.
+let vibrateMinutes = 0;
 
 let pendingConfigCount = 0;
 let pendingStops = [];
@@ -281,6 +287,9 @@ const ALL_MESSAGE_KEYS = [
 	"staleAge",
 	"pauseMinutes",
 	"diagText",
+	"departTime",
+	"departTime2",
+	"vibrateMinutes",
 ];
 const MESSAGE_KEY_CODES = new Map(
 	ALL_MESSAGE_KEYS.map((key, index) => [key, 10000 + index])
@@ -471,6 +480,8 @@ function handleConfigItem(item) {
 			timeline: !!item.timelineEnabled,
 		};
 		if (STRINGS[item.language]) language = item.language;
+		vibrateMinutes =
+			typeof item.vibrateMinutes === "number" ? item.vibrateMinutes : 0;
 		pendingConfigCount = item.itemCount;
 		pendingStops = [];
 		pendingLines = [];
@@ -551,6 +562,13 @@ let quotaRemaining = null;
 // Upper end of the 30-60 s refresh rule: the PRIM quota is the scarce
 // resource, and departures are only shown to the minute anyway.
 const REFRESH_INTERVAL_MS = 60000;
+// While the next departure is more than FAR_DEPARTURE_MINUTES away, times
+// are refreshed every FAR_REFRESH_INTERVAL_MS instead: the countdown runs on
+// the watch, and far times change little.
+const FAR_DEPARTURE_MINUTES = 10;
+const FAR_REFRESH_INTERVAL_MS = 3 * 60000;
+// Timer ticks land a little before a full interval after the last reply.
+const REFRESH_SLACK_MS = 5000;
 // Clears the spinner when a reply never comes (the refresh timer asks again).
 const REFRESH_INDICATOR_TIMEOUT_MS = 15000;
 // A fast reply still shows the spinner this long, so it doesn't flash for
@@ -668,12 +686,92 @@ function handleDepartureUpdate(item) {
 		destination: item.destination,
 		minutes: item.minutes,
 		minutes2: item.minutes2, // undefined without a following departure
+		// Epoch seconds, when known: the minutes are counted down from these.
+		departTime: item.departTime,
+		departTime2: item.departTime2,
 		atStop: !!item.atStop,
 		cancelled: !!item.cancelled,
 		mission: item.mission || "",
 		mission2: item.mission2 || "",
 	});
 	render();
+	checkApproach();
+}
+
+/**
+ * @param {number} epochSeconds
+ * @returns {number} Whole minutes from now (negative once it's passed).
+ */
+function minutesUntil(epochSeconds) {
+	return Math.round((epochSeconds * 1000 - Date.now()) / 60000);
+}
+
+/**
+ * @param {object} dep - A departures entry.
+ * @returns {{minutes: number, departTime: ?number, minutes2: ?number,
+ *   mission2: string, shifted: boolean}} The next departure's minutes,
+ *   counted down from its time when known. Once the first has left (over a
+ *   minute ago) the following one takes its place until the next reply.
+ */
+function nextDepartures(dep) {
+	if (typeof dep.departTime !== "number") {
+		return {
+			minutes: dep.minutes,
+			departTime: null,
+			minutes2: typeof dep.minutes2 === "number" ? dep.minutes2 : null,
+			mission2: dep.mission2,
+			shifted: false,
+		};
+	}
+	const first = minutesUntil(dep.departTime);
+	const second =
+		typeof dep.departTime2 === "number" ? minutesUntil(dep.departTime2) : null;
+	if (first < -1 && second !== null) {
+		return {
+			minutes: Math.max(0, second),
+			departTime: dep.departTime2,
+			minutes2: null,
+			mission2: "",
+			shifted: true,
+		};
+	}
+	return {
+		minutes: Math.max(0, first),
+		departTime: dep.departTime,
+		minutes2: second === null ? null : Math.max(0, second),
+		mission2: dep.mission2,
+		shifted: false,
+	};
+}
+
+// Approach vibration: once per departure, when the countdown of the stop on
+// screen goes from above vibrateMinutes to at or below it. A train already
+// that close when the screen opens doesn't vibrate.
+const seenAboveThreshold = new Set(); // departTimes seen above the threshold
+const vibrated = new Set(); // departTimes already vibrated for
+
+/** Vibrates if the departure on screen just reached vibrateMinutes. */
+function checkApproach() {
+	if (vibrateMinutes <= 0) return;
+	const item = items[selectedIndex];
+	// biome-ignore lint/complexity/useOptionalChain: see requestRefresh
+	if (!item || item.type !== "stop") return;
+	const dep = departures.get(departureKey(item));
+	if (!dep || dep.state !== "ok" || dep.cancelled || dep.atStop) return;
+	const next = nextDepartures(dep);
+	if (next.departTime === null) return;
+	if (next.minutes > vibrateMinutes) {
+		seenAboveThreshold.add(next.departTime);
+	} else if (
+		seenAboveThreshold.has(next.departTime) &&
+		!vibrated.has(next.departTime)
+	) {
+		vibrated.add(next.departTime);
+		note("vibrate");
+		Vibes.doublePulse();
+	}
+	if (seenAboveThreshold.size > 20) seenAboveThreshold.clear();
+	if (vibrated.size > 20) vibrated.clear();
 }
 
 /**
@@ -681,11 +779,10 @@ function handleDepartureUpdate(item) {
  * PRIM quota or Bluetooth spent on stops nobody is looking at).
  * @param {boolean} [manual] - Select: retries even a permanent error, and
  *   asks again even while a request is in flight.
- * @param {boolean} [navigation] - Up/Down: only when the data is older
- *   than REFRESH_INTERVAL_MS, so cycling screens doesn't spend a call per
- *   press.
+ * Automatic requests (timer, Up/Down) are skipped while the data is fresh
+ * enough (refreshAge), so cycling screens doesn't spend a call per press.
  */
-function requestRefresh(manual, navigation) {
+function requestRefresh(manual) {
 	const item = items[selectedIndex];
 	// Not `item?.type`: kept as written on real hardware (see git history).
 	// biome-ignore lint/complexity/useOptionalChain: see above
@@ -696,11 +793,11 @@ function requestRefresh(manual, navigation) {
 		return;
 	}
 	if (
-		navigation &&
+		!manual &&
 		known &&
-		Date.now() - known.receivedAt < REFRESH_INTERVAL_MS
+		Date.now() - known.receivedAt < refreshAge(known) - REFRESH_SLACK_MS
 	) {
-		return;
+		return; // still fresh enough (timer tick or Up/Down)
 	}
 	if (!manual && pendingRefresh.has(key)) return; // already asked
 	if (!refreshQueue.some((queued) => departureKey(queued) === key)) {
@@ -709,6 +806,20 @@ function requestRefresh(manual, navigation) {
 	markRefreshPending(key);
 	render(); // shows the spinner right away
 	flushOutbox();
+}
+
+/**
+ * @param {object} dep - A departures entry.
+ * @returns {number} How old it may get before an automatic refresh.
+ */
+function refreshAge(dep) {
+	if (dep.state !== "ok" || dep.staleReason || dep.pauseMinutes !== undefined) {
+		return REFRESH_INTERVAL_MS;
+	}
+	if (dep.atStop || dep.cancelled) return REFRESH_INTERVAL_MS;
+	return nextDepartures(dep).minutes > FAR_DEPARTURE_MINUTES
+		? FAR_REFRESH_INTERVAL_MS
+		: REFRESH_INTERVAL_MS;
 }
 
 /** Starts the foreground refresh timer, once. */
@@ -792,14 +903,19 @@ function describeScreen() {
 	// screen says why and how old they are, in place of the cycle hint.
 	const paused = !!dep && typeof dep.pauseMinutes === "number";
 	const stale = !!dep && typeof dep.staleReason === "string";
-	if (paused || stale) {
-		model.alert = paused
-			? t("pausedFor", dep.pauseMinutes)
-			: t(dep.staleReason);
+	const offline = !phoneConnected();
+	if (paused || stale || (offline && dep)) {
+		model.alert = offline
+			? t("phoneDisconnected")
+			: paused
+				? t("pausedFor", dep.pauseMinutes)
+				: t(dep.staleReason);
 		model.footer = t(
 			"updatedAgo",
 			Math.floor((Date.now() - dep.receivedAt) / 60000)
 		);
+	} else if (offline) {
+		model.alert = t("phoneDisconnected");
 	} else if (items.length > 1) {
 		model.footer = t("cycleHint");
 	}
@@ -839,19 +955,21 @@ function describeScreen() {
 		model.lineError = stateMessage[1];
 		return model;
 	}
-	const status = dep.cancelled
-		? t("cancelled")
-		: dep.atStop
-			? t("atStop")
-			: `${dep.minutes} min`;
+	const next = nextDepartures(dep);
+	const status =
+		dep.cancelled && !next.shifted
+			? t("cancelled")
+			: dep.atStop && !next.shifted
+				? t("atStop")
+				: `${next.minutes} min`;
 	model.status = pendingRefresh.has(departureKey(item))
 		? `${status} ${SPINNER_FRAMES[spinnerFrame]}`
 		: status;
 	model.line = dep.destination
 		? `${dep.mission ? `${dep.mission} - ` : ""}${t("towards")} ${dep.destination}`
 		: dep.mission;
-	if (typeof dep.minutes2 === "number") {
-		model.next = `${t("thenLabel")} ${dep.minutes2} min${dep.mission2 ? ` - ${dep.mission2}` : ""}`;
+	if (typeof next.minutes2 === "number") {
+		model.next = `${t("thenLabel")} ${next.minutes2} min${next.mission2 ? ` - ${next.mission2}` : ""}`;
 	}
 	return model;
 }
@@ -925,7 +1043,7 @@ class MainBehavior extends Behavior {
 		if (items.length === 0) return;
 		selectedIndex = (selectedIndex + direction + items.length) % items.length;
 		render();
-		requestRefresh(false, true);
+		requestRefresh(false);
 	}
 }
 
@@ -1064,6 +1182,35 @@ function applyScreen(model) {
 /** Brings the screen up to date. Cheap: only changed contents are touched. */
 function render() {
 	run("render", () => applyScreen(describeScreen()));
+}
+
+/** @returns {boolean} False only when the watch knows the phone is gone. */
+function phoneConnected() {
+	return !(
+		typeof watch !== "undefined" &&
+		watch.connected &&
+		watch.connected.app === false
+	);
+}
+
+if (typeof watch !== "undefined") {
+	// The countdown moves on (times are counted down on the watch).
+	watch.addEventListener(
+		"minutechange",
+		safe("minutechange", () => {
+			render();
+			checkApproach();
+		})
+	);
+	// Can take 15-30 s to be reported after the phone goes away.
+	watch.addEventListener(
+		"connected",
+		safe("connected", () => {
+			note(`connected ${phoneConnected()}`);
+			render();
+			if (phoneConnected()) requestRefresh(false);
+		})
+	);
 }
 
 run("createView", createView);

@@ -146,6 +146,20 @@ const CONFIG_HTML = `<!DOCTYPE html>
     </div>
   </fieldset>
 
+  <fieldset>
+    <legend data-i18n="vibrateLegend">Vibration</legend>
+    <label for="vibrateMinutes" data-i18n="vibrateLabel">Vibrer quand le prochain départ est à :</label>
+    <select id="vibrateMinutes">
+      <option value="0" data-i18n="vibrateOff">Jamais</option>
+      <option value="1">1 min</option>
+      <option value="2">2 min</option>
+      <option value="3">3 min</option>
+      <option value="5">5 min</option>
+      <option value="10">10 min</option>
+    </select>
+    <div class="searchStatus" data-i18n="vibrateHint">Seulement quand l'app est ouverte sur l'arrêt concerné, une fois par départ.</div>
+  </fieldset>
+
   <!-- Error journal: filled from window.__diagLog (see buildConfigDataUri in
        src/pkjs/index.js). Stays on the phone; the user copies it by hand. -->
   <fieldset>
@@ -224,6 +238,10 @@ const CONFIG_HTML = `<!DOCTYPE html>
       guardWindow: "W (minutes)",
       guardPause: "P (pause, minutes)",
       guardInvalid: "Garde-fou : N doit être 0 ou au moins 2, W et P au moins 1.",
+      vibrateLegend: "Vibration",
+      vibrateLabel: "Vibrer quand le prochain départ est à :",
+      vibrateOff: "Jamais",
+      vibrateHint: "Seulement quand l'app est ouverte sur l'arrêt concerné, une fois par départ.",
       diagLegend: "Diagnostic",
       diagNone: "Aucune erreur enregistrée.",
       diagCount: "{n} erreur(s) enregistrée(s). En cas de souci, copie le journal et envoie-le au développeur.",
@@ -296,6 +314,10 @@ const CONFIG_HTML = `<!DOCTYPE html>
       guardWindow: "W (minutes)",
       guardPause: "P (pause, minutes)",
       guardInvalid: "Call guard: N must be 0 or at least 2, W and P at least 1.",
+      vibrateLegend: "Vibration",
+      vibrateLabel: "Vibrate when the next departure is:",
+      vibrateOff: "Never",
+      vibrateHint: "Only while the app is open on that stop, once per departure.",
       diagLegend: "Diagnostics",
       diagNone: "No error recorded.",
       diagCount: "{n} error(s) recorded. If something goes wrong, copy the log and send it to the developer.",
@@ -1365,6 +1387,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
       },
       timelineEnabled: document.getElementById("timelineEnabled").checked,
       callGuard: callGuard,
+      vibrateMinutes: parseInt(document.getElementById("vibrateMinutes").value, 10) || 0,
       language: document.getElementById("language").value
     };
     var json = JSON.stringify(config);
@@ -1402,6 +1425,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
       document.getElementById("scheduleEnd").value = initial.alertSchedule.endTime || "19:30";
     }
     document.getElementById("timelineEnabled").checked = !!initial.timelineEnabled;
+    document.getElementById("vibrateMinutes").value = String(initial.vibrateMinutes || 0);
     var guard = initial.callGuard || {};
     if (typeof guard.maxCalls === "number") document.getElementById("guardMaxCalls").value = guard.maxCalls;
     if (typeof guard.windowMinutes === "number") document.getElementById("guardWindow").value = guard.windowMinutes;
@@ -1496,7 +1520,9 @@ const {
 	decideCallGuard,
 	callGuardSettingsChanged,
 	staleExtra,
+	callTimeMs,
 } = require("./trips");
+const { watchLineColors } = require("./colors");
 const { parseWatchDiag, mergeDiagEntries } = require("./diag");
 
 // --- Error journal (config page > Diagnostic) ---
@@ -1750,6 +1776,8 @@ function sendConfigToWatch(rawConfig) {
 			scheduleEndMinutes: timeStringToMinutes(config.alertSchedule.endTime),
 			timelineEnabled: config.timelineEnabled ? 1 : 0,
 			language: resolveLanguage(config.language),
+			// Vibrate when the next departure gets this close (0 = off).
+			vibrateMinutes: config.vibrateMinutes,
 		},
 	];
 
@@ -1762,9 +1790,11 @@ function sendConfigToWatch(rawConfig) {
 			lineRef: stop.lineRef,
 			lineName: stop.lineName,
 			stopName: stop.stopName,
-			lineColor: stop.lineColor || "#888888",
-			lineTextColor: stop.lineTextColor || "#ffffff",
 		};
+		// Rounded to the watch's 64 colors, text kept readable (colors.js).
+		const colors = watchLineColors(stop.lineColor, stop.lineTextColor);
+		item.lineColor = colors.color;
+		item.lineTextColor = colors.textColor;
 		// Optional strings are omitted rather than sent empty (see
 		// docs/pebble-idfm-prim/SKILL.md, AppMessage format).
 		if (stop.destStopRef) {
@@ -1975,6 +2005,10 @@ function normalizeConfig(config) {
 	return Object.assign({}, config, {
 		trackedStops: Array.isArray(config.trackedStops) ? config.trackedStops : [],
 		trackedLines: Array.isArray(config.trackedLines) ? config.trackedLines : [],
+		vibrateMinutes: Math.max(
+			0,
+			Math.min(30, Math.floor(Number(config.vibrateMinutes)) || 0)
+		),
 		alertSchedule: {
 			days: Array.isArray(schedule.days) ? schedule.days : [],
 			startTime: schedule.startTime || "07:00",
@@ -2165,8 +2199,11 @@ function replyWithDepartures(visits, lineName, reply) {
 			const call = journey.MonitoredCall;
 			const atStop = call.VehicleAtStop === true;
 			const minutes = callMinutesRemaining(call);
+			const timeMs = callTimeMs(call);
 			return {
 				journey: journey,
+				// Epoch seconds: the watch counts the minutes down itself.
+				departTime: timeMs === null ? null : Math.floor(timeMs / 1000),
 				atStop: atStop,
 				cancelled: call.DepartureStatus === "cancelled",
 				// ExpectedArrivalTime can be slightly in the past before
@@ -2196,6 +2233,9 @@ function replyWithDepartures(visits, lineName, reply) {
 		atStop: first.atStop,
 		cancelled: first.cancelled,
 	};
+	if (!first.atStop && first.departTime !== null) {
+		extra.departTime = first.departTime;
+	}
 	const mission = journeyMission(first.journey);
 	if (mission) extra.mission = mission;
 	// The watch prints minutes2 as-is (no at-stop flag for it), hence 0
@@ -2203,6 +2243,9 @@ function replyWithDepartures(visits, lineName, reply) {
 	if (departures.length > 1 && !departures[1].cancelled) {
 		const second = departures[1];
 		extra.minutes2 = second.atStop ? 0 : second.minutes;
+		if (!second.atStop && second.departTime !== null) {
+			extra.departTime2 = second.departTime;
+		}
 		const mission2 = journeyMission(second.journey);
 		if (mission2) extra.mission2 = mission2;
 	}

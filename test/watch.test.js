@@ -153,3 +153,84 @@ test("a launch that stopped during startup is reported at the next one", async (
 	assert.strictEqual(storage.get("diagSession"), "ok");
 	watch.restore();
 });
+
+/** A departureUpdate with departure times `m1`/`m2` minutes from now. */
+function timed(watch, m1, m2) {
+	const at = (m) => Math.floor((watch.now + m * 60000) / 1000);
+	return { ...OK, minutes: m1, minutes2: m2, departTime: at(m1), departTime2: at(m2) };
+}
+
+test("the watch counts the minutes down itself between refreshes", async () => {
+	const watch = await started();
+	watch.deliver(timed(watch, 5, 12));
+	watch.advance(2 * 60000);
+	watch.emit("minutechange");
+	// The spinner may follow: the timer asked for fresh times meanwhile.
+	assert.ok(watch.screen().some((line) => /^3 min/.test(line)));
+	assert.ok(watch.screen().includes("Puis 10 min"));
+	watch.restore();
+});
+
+test("once the first train has left, the next one takes its place", async () => {
+	const watch = await started();
+	watch.deliver(timed(watch, 1, 6));
+	watch.advance(3 * 60000);
+	watch.emit("minutechange");
+	const screen = watch.screen().join("|");
+	assert.match(screen, /\|3 min[^|]*\|/); // 6 - 3
+	assert.doesNotMatch(screen, /Puis/);
+	watch.restore();
+});
+
+test("far departures are refreshed every 3 minutes instead of every minute", async () => {
+	const watch = await started();
+	watch.deliver(timed(watch, 15, 25));
+	const refreshes = () => watch.sent.filter((m) => m.itemType === "refreshStop").length;
+	const before = refreshes();
+	watch.advance(60000);
+	assert.strictEqual(refreshes(), before);
+	watch.advance(2 * 60000);
+	assert.strictEqual(refreshes(), before + 1);
+	watch.restore();
+});
+
+test("vibrates once when the next departure comes within the setting", async () => {
+	const watch = await loadWatch();
+	watch.connect();
+	for (const item of configItems([STOP], "fr", 2)) watch.deliver(item);
+	watch.deliver(timed(watch, 4, 12));
+	watch.advance(60000);
+	watch.emit("minutechange"); // 3 min: nothing yet
+	assert.deepStrictEqual(watch.vibrations, []);
+	watch.advance(60000);
+	watch.emit("minutechange"); // 2 min
+	watch.advance(60000);
+	watch.emit("minutechange"); // 1 min: no second vibration
+	assert.deepStrictEqual(watch.vibrations, ["double"]);
+	watch.restore();
+});
+
+test("no vibration for a train already that close when the screen opens", async () => {
+	const watch = await loadWatch();
+	watch.connect();
+	for (const item of configItems([STOP], "fr", 3)) watch.deliver(item);
+	watch.deliver(timed(watch, 2, 9));
+	watch.emit("minutechange");
+	assert.deepStrictEqual(watch.vibrations, []);
+	watch.restore();
+});
+
+test("says when the phone is disconnected, keeping the last times", async () => {
+	const watch = await started();
+	watch.deliver(timed(watch, 5, 12));
+	watch.advance(1600);
+	watch.setPhoneConnected(false);
+	assert.ok(watch.screen().includes("Téléphone déconnecté"));
+	assert.ok(watch.screen().includes("5 min"));
+	const before = watch.sent.length;
+	watch.setPhoneConnected(true);
+	assert.ok(!watch.screen().includes("Téléphone déconnecté"));
+	watch.advance(60000);
+	assert.ok(watch.sent.length >= before);
+	watch.restore();
+});

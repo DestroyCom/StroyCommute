@@ -40,6 +40,9 @@ async function loadWatch(options = {}) {
 	let writable = false;
 	let failNextWrite = null;
 	let app = null;
+	const vibrations = [];
+	const watchListeners = {};
+	const connected = { app: true, pebblekit: true };
 
 	const fakes = {
 		localStorage: {
@@ -107,6 +110,18 @@ async function loadWatch(options = {}) {
 		},
 	};
 	fakes.clearInterval = fakes.clearTimeout;
+	fakes.__Vibes = {
+		shortPulse: () => vibrations.push("short"),
+		longPulse: () => vibrations.push("long"),
+		doublePulse: () => vibrations.push("double"),
+	};
+	fakes.watch = {
+		connected,
+		addEventListener: (name, fn) => {
+			if (!watchListeners[name]) watchListeners[name] = [];
+			watchListeners[name].push(fn);
+		},
+	};
 	Object.assign(globalThis, fakes);
 	const realNow = Date.now;
 	Date.now = () => now;
@@ -117,7 +132,8 @@ async function loadWatch(options = {}) {
 		.replace(
 			'import Message from "pebble/message";',
 			"const Message = globalThis.__Message;"
-		);
+		)
+		.replace('import Vibes from "pebble/vibes";', "const Vibes = globalThis.__Vibes;");
 	const file = path.join(os.tmpdir(), `stroycommute-main-${process.pid}-${++loads}.mjs`);
 	fs.writeFileSync(file, source);
 	try {
@@ -137,6 +153,16 @@ async function loadWatch(options = {}) {
 	const handle = {
 		storage,
 		sent,
+		vibrations,
+		/** Fires a `watch` event (minutechange, connected...). */
+		emit(name) {
+			for (const fn of watchListeners[name] || []) fn();
+		},
+		/** Sets watch.connected.app and fires "connected". */
+		setPhoneConnected(value) {
+			connected.app = value;
+			handle.emit("connected");
+		},
 		get instances() {
 			return instances;
 		},
@@ -185,6 +211,9 @@ async function loadWatch(options = {}) {
 			const banner = app.contents[0].contents[0];
 			return banner.visible ? banner.skin.fill : null;
 		},
+		get now() {
+			return now;
+		},
 		get timerCount() {
 			return timers.length;
 		},
@@ -199,7 +228,7 @@ async function loadWatch(options = {}) {
 }
 
 /** Config items as pkjs's sendConfigToWatch sends them. */
-function configItems(stops, language = "fr") {
+function configItems(stops, language = "fr", vibrateMinutes = 0) {
 	const count = 1 + stops.length;
 	return [
 		{
@@ -211,6 +240,7 @@ function configItems(stops, language = "fr") {
 			scheduleEndMinutes: 0,
 			timelineEnabled: 0,
 			language,
+			vibrateMinutes,
 		},
 		...stops.map((stop, i) => ({
 			itemIndex: 1 + i,

@@ -124,3 +124,20 @@ test("a watch diagnostic report lands in the journal shown by the settings page"
 	assert.match(html, /window\.__diagLog = \[\{"t":5,"src":"watch","w":"render"/);
 	phone.restore();
 });
+
+test("replies carry the departure times, and the config the watch colors and vibration", () => {
+	const config = { ...CONFIG, vibrateMinutes: 3, trackedStops: [{ ...STOP, lineColor: "#FFCE00", lineTextColor: "#FFFFFF" }] };
+	const phone = loadPhone({ storage: new Map([["stroycommuteConfig", JSON.stringify(config)]]) });
+	phone.fromWatch(REFRESH);
+	phone.requests[0].respond(200, siriAnswer(phone.now, [4, 11]));
+	const update = updates(phone)[0];
+	assert.strictEqual(update.departTime, Math.floor((phone.now + 4 * 60000) / 1000));
+	assert.strictEqual(update.departTime2, Math.floor((phone.now + 11 * 60000) / 1000));
+	phone.fire("ready", {});
+	phone.advance(2000);
+	const meta = phone.sent.find((m) => m.itemType === "configMeta");
+	const stop = phone.sent.find((m) => m.itemType === "configStop");
+	assert.strictEqual(meta.vibrateMinutes, 3);
+	assert.deepStrictEqual([stop.lineColor, stop.lineTextColor], ["#FFAA00", "#000000"]);
+	phone.restore();
+});

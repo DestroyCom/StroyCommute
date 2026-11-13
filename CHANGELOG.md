@@ -11,6 +11,8 @@ version texte à coller dans le store.
 
 ### Nouveautés
 
+- Vibration à l'approche du train, au choix de 1 à 10 minutes avant le départ (réglage « Vibration », désactivé par défaut).
+- La montre indique quand le téléphone est déconnecté, tout en gardant les derniers horaires affichés.
 - Section **Diagnostic** dans les réglages : les erreurs rencontrées par l'app sont enregistrées et peuvent être copiées pour les envoyer au développeur.
 
 ### Améliorations
@@ -19,6 +21,9 @@ version texte à coller dans le store.
 - Compatibilité avec les dernières versions de l'app Pebble : les accès réseau à PRIM et à la recherche d'arrêts IDFM sont déclarés.
 - Affichage plus léger sur la montre : l'écran n'est plus redessiné entièrement à chaque mise à jour, ce qui économise mémoire et batterie.
 - Moins d'appels à l'API PRIM : une même demande faite plusieurs fois en quelques secondes ne coûte plus qu'un appel sur ton quota.
+- Les minutes avant le départ se mettent à jour toutes seules chaque minute, et le train suivant prend le relais quand le premier est parti.
+- Quand le prochain départ est à plus de 10 minutes, les horaires sont rafraîchis toutes les 3 minutes au lieu de chaque minute : moins de batterie et de quota consommés.
+- Couleurs des lignes ajustées à l'écran de la montre, avec un texte toujours lisible sur le bandeau.
 
 ### Corrections
 
