@@ -12,7 +12,9 @@ const MIN_CONTRAST = 3; // WCAG ratio for large/bold text
  * @returns {?number[]} [r, g, b] 0-255, null if `hex` isn't a color.
  */
 function parseHex(hex) {
-	let s = String(hex || "").trim().replace(/^#/, "");
+	let s = String(hex || "")
+		.trim()
+		.replace(/^#/, "");
 	if (/^[0-9a-f]{3}$/i.test(s)) s = s.replace(/./g, "$&$&");
 	if (!/^[0-9a-f]{6}$/i.test(s)) return null;
 	return [0, 2, 4].map((i) => parseInt(s.slice(i, i + 2), 16));
