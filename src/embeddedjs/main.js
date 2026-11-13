@@ -10,6 +10,7 @@ const STRINGS = {
 	en: {
 		loading: "Loading...",
 		noStops: "No stop configured",
+		configureHint: "Add stops in the Pebble app",
 		cycleHint: "Up / Down to switch",
 		network: "Network error",
 		noRealtimeData: "No real-time data for this stop",
@@ -32,6 +33,7 @@ const STRINGS = {
 	fr: {
 		loading: "Chargement...",
 		noStops: "Aucun arrêt configuré",
+		configureHint: "Ajoute des arrêts dans l'app Pebble",
 		cycleHint: "Haut / Bas pour changer",
 		network: "Erreur réseau",
 		noRealtimeData: "Pas de temps réel pour cet arrêt",
@@ -858,7 +860,9 @@ function buildItemList() {
 			lineName: line.lineName,
 		});
 	}
-	if (configLoaded) list.push({ type: "settings" });
+	// Settings last, once loaded, and only next to something to show:
+	// with nothing configured the screen says so instead.
+	if (configLoaded && list.length > 0) list.push({ type: "settings" });
 	return list;
 }
 
@@ -895,6 +899,7 @@ function describeScreen() {
 	const item = items[selectedIndex];
 	if (!item) {
 		model.line = configLoaded ? t("noStops") : t("loading");
+		if (configLoaded) model.footer = t("configureHint");
 		return model;
 	}
 	const dep =
@@ -992,13 +997,24 @@ function skinFor(color) {
 	}
 	return skin;
 }
+// Banner texts longer than this (an A->B trip: line, boarding and arrival
+// stops) would take 3 lines and overflow the banner in 18px: they use 14px.
+const LONG_BANNER_CHARS = 34;
 const bannerStyleCache = new Map();
-/** @param {string} color @returns {Style} */
-function bannerStyle(color) {
-	let style = bannerStyleCache.get(color);
+/**
+ * @param {string} color
+ * @param {boolean} small - The 14px font, for long texts.
+ * @returns {Style}
+ */
+function bannerStyle(color, small) {
+	const key = `${color}|${small}`;
+	let style = bannerStyleCache.get(key);
 	if (!style) {
-		style = new Style({ font: "bold 18px Gothic", color: color });
-		bannerStyleCache.set(color, style);
+		style = new Style({
+			font: small ? "bold 14px Gothic" : "bold 18px Gothic",
+			color: color,
+		});
+		bannerStyleCache.set(key, style);
 	}
 	return style;
 }
@@ -1058,16 +1074,40 @@ const application = new Application(null, {
 // Piu only routes button presses to a focused container's Behavior.
 application.focus();
 
-// Contents of the screen, created once by createView(). Vertical positions
-// fit Emery's 200x228 display.
+// Contents of the screen, created once by createView().
 const view = {};
 
-/** @returns {Label} A hidden single-line label. */
-function label(top, style) {
+// Where each part goes, as [top, horizontal inset]: Emery's 200x228
+// rectangle, or Gabbro's 260x260 circle, where the lines near the top and
+// bottom are narrower (text is centered, Piu's default).
+const ROUND = typeof screen !== "undefined" && !!screen.round;
+const LAYOUT = ROUND
+	? {
+			banner: { top: 30, height: 48, inset: 44 },
+			title: [40, 30],
+			line: [86, 22],
+			status: [134, 20],
+			next: [170, 30],
+			alert: [198, 46],
+			footer: [222, 70],
+		}
+	: {
+			banner: { top: 0, height: 44, inset: 8 },
+			title: [10, 8],
+			line: [60, 8],
+			status: [110, 8],
+			next: [150, 8],
+			alert: [178, 8],
+			footer: [200, 8],
+		};
+
+/** @returns {Label} A hidden single-line label at LAYOUT[name]. */
+function label(name, style) {
+	const [top, inset] = LAYOUT[name];
 	const content = new Label(null, {
 		top: top,
-		left: 8,
-		right: 8,
+		left: inset,
+		right: inset,
 		style: style,
 		string: "",
 	});
@@ -1076,11 +1116,12 @@ function label(top, style) {
 }
 
 /** @returns {Text} A hidden two-line text (Label doesn't wrap). */
-function text(top, style) {
+function text(name, style) {
+	const [top, inset] = LAYOUT[name];
 	const content = new Text(null, {
 		top: top,
-		left: 8,
-		right: 8,
+		left: inset,
+		right: inset,
 		height: 44,
 		style: style,
 		string: "",
@@ -1093,19 +1134,19 @@ function createView() {
 	view.banner = new Container(null, {
 		left: 0,
 		right: 0,
-		top: 0,
-		height: 44,
+		top: LAYOUT.banner.top,
+		height: LAYOUT.banner.height,
 		skin: whiteSkin,
 	});
 	view.banner.visible = false;
 	view.bannerText = null; // created by applyBanner, per text color
-	view.title = label(10, titleStyle);
-	view.line = text(60, bodyStyle);
-	view.lineError = text(60, errorStyle);
-	view.status = label(110, titleStyle);
-	view.next = label(150, bodyStyle);
-	view.alert = label(178, errorStyle);
-	view.footer = label(200, rowStyle);
+	view.title = label("title", titleStyle);
+	view.line = text("line", bodyStyle);
+	view.lineError = text("line", errorStyle);
+	view.status = label("status", titleStyle);
+	view.next = label("next", bodyStyle);
+	view.alert = label("alert", errorStyle);
+	view.footer = label("footer", rowStyle);
 	const root = new Container(null, {
 		left: 0,
 		right: 0,
@@ -1140,7 +1181,8 @@ function show(name, value) {
 
 /** @param {?{color: string, textColor: string, text: string}} banner */
 function applyBanner(banner) {
-	const look = banner ? `${banner.color}|${banner.textColor}` : "";
+	const small = !!banner && banner.text.length > LONG_BANNER_CHARS;
+	const look = banner ? `${banner.color}|${banner.textColor}|${small}` : "";
 	if (shown.bannerLook !== look) {
 		shown.bannerLook = look;
 		view.banner.visible = !!banner;
@@ -1150,11 +1192,11 @@ function applyBanner(banner) {
 			// than restyling one.
 			view.banner.empty();
 			view.bannerText = new Text(null, {
-				left: 8,
-				right: 8,
+				left: LAYOUT.banner.inset,
+				right: LAYOUT.banner.inset,
 				top: 0,
 				bottom: 0,
-				style: bannerStyle(banner.textColor),
+				style: bannerStyle(banner.textColor, small),
 				string: banner.text,
 			});
 			view.banner.add(view.bannerText);

@@ -110,6 +110,8 @@ async function loadWatch(options = {}) {
 		},
 	};
 	fakes.clearInterval = fakes.clearTimeout;
+	// Emery's rectangle unless the test asks for another screen.
+	fakes.screen = options.screen || { width: 200, height: 228, round: false };
 	fakes.__Vibes = {
 		shortPulse: () => vibrations.push("short"),
 		longPulse: () => vibrations.push("long"),

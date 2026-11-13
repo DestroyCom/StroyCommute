@@ -234,3 +234,27 @@ test("says when the phone is disconnected, keeping the last times", async () => 
 	assert.ok(watch.sent.length >= before);
 	watch.restore();
 });
+
+test("with nothing configured, the screen says so and where to fix it", async () => {
+	const watch = await started([]);
+	assert.deepStrictEqual(watch.screen(), ["Aucun arrêt configuré", "Ajoute des arrêts dans l'app Pebble"]);
+	watch.press("down"); // nothing to cycle to
+	assert.strictEqual(watch.screen()[0], "Aucun arrêt configuré");
+	watch.restore();
+});
+
+test("the round screen (Gabbro) keeps the text away from the edges", async () => {
+	const watch = await started([STOP], { screen: { width: 260, height: 260, round: true } });
+	const [banner, , line, , status, , , footer] = watch.root.contents[0].contents;
+	assert.ok(banner.top > 0);
+	assert.ok(line.left >= 20 && status.top > 120);
+	assert.ok(footer.left >= 60);
+	watch.restore();
+});
+
+test("a long A->B banner uses the smaller font", async () => {
+	const watch = await started([{ ...STOP, destStopRef: "STIF:StopArea:SP:1:", destStopName: "Bourg-la-Reine Centre" }]);
+	const banner = watch.root.contents[0].contents[0];
+	assert.match(banner.contents[0].style.font, /^bold 14px/);
+	watch.restore();
+});
