@@ -53,6 +53,8 @@
   .moveButtons { display: flex; gap: 6px; margin-right: auto; }
   .moveBtn { background: #444; padding: 8px 14px; font-size: 15px; line-height: 1; }
   .moveBtn:disabled { opacity: 0.3; }
+  #diagText { width: 100%; margin-top: 8px; padding: 8px; font-family: monospace; font-size: 12px; background: #111; color: #ddd; border: 1px solid #444; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .diagButtons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -134,6 +136,22 @@
     </div>
   </fieldset>
 
+  <!-- Error journal: filled from window.__diagLog (see buildConfigDataUri in
+       src/pkjs/index.js). Stays on the phone; the user copies it by hand. -->
+  <fieldset>
+    <legend data-i18n="diagLegend">Diagnostic</legend>
+    <div class="searchStatus" id="diagSummary"></div>
+    <details class="help" id="diagDetails" hidden>
+      <summary data-i18n="diagShow">Voir le journal</summary>
+      <textarea id="diagText" rows="10" readonly></textarea>
+      <div class="diagButtons">
+        <button type="button" onclick="copyDiag()" data-i18n="diagCopy">Copier</button>
+        <button type="button" class="remove" onclick="clearDiag()" data-i18n="diagClear">Effacer le journal</button>
+      </div>
+      <div class="searchStatus" id="diagCopyStatus"></div>
+    </details>
+  </fieldset>
+
   <p id="itemCount"></p>
   <button type="button" onclick="save()" data-i18n="save">Enregistrer</button>
 
@@ -196,6 +214,15 @@
       guardWindow: "W (minutes)",
       guardPause: "P (pause, minutes)",
       guardInvalid: "Garde-fou : N doit être 0 ou au moins 2, W et P au moins 1.",
+      diagLegend: "Diagnostic",
+      diagNone: "Aucune erreur enregistrée.",
+      diagCount: "{n} erreur(s) enregistrée(s). En cas de souci, copie le journal et envoie-le au développeur.",
+      diagShow: "Voir le journal",
+      diagCopy: "Copier",
+      diagCopied: "Journal copié.",
+      diagCopyFailed: "Copie impossible : sélectionne le texte à la main.",
+      diagClear: "Effacer le journal",
+      diagClearConfirm: "Effacer le journal ? La page se fermera sans enregistrer tes autres modifications.",
       add: "Ajouter",
       cancel: "Annuler",
       searching: "Recherche...",
@@ -259,6 +286,15 @@
       guardWindow: "W (minutes)",
       guardPause: "P (pause, minutes)",
       guardInvalid: "Call guard: N must be 0 or at least 2, W and P at least 1.",
+      diagLegend: "Diagnostics",
+      diagNone: "No error recorded.",
+      diagCount: "{n} error(s) recorded. If something goes wrong, copy the log and send it to the developer.",
+      diagShow: "Show the log",
+      diagCopy: "Copy",
+      diagCopied: "Log copied.",
+      diagCopyFailed: "Can't copy: select the text by hand.",
+      diagClear: "Clear the log",
+      diagClearConfirm: "Clear the log? The page will close without saving your other changes.",
       add: "Add",
       cancel: "Cancel",
       searching: "Searching...",
@@ -326,6 +362,7 @@
   function onLanguageChange() {
     lang = resolveLanguage(document.getElementById("language").value);
     applyStaticTranslations();
+    renderDiag();
     var stops = collectStops();
     var lines = collectLines();
     document.getElementById("stopsList").innerHTML = "";
@@ -1227,6 +1264,61 @@
     return { maxCalls: maxCalls, windowMinutes: windowMinutes, pauseMinutes: pauseMinutes };
   }
 
+  /**
+   * @param {object[]} entries - Error journal entries (see src/pkjs/diag.js).
+   * @returns {string} One readable block per entry, most recent first.
+   */
+  function formatDiag(entries) {
+    var nl = String.fromCharCode(10); // no backslash escapes: this page is embedded in a template literal
+    return entries.slice().reverse().map((e) => {
+      var lines = [new Date(e.t).toLocaleString() + " [" + (e.src || "?") + "] " + e.w + ": " + e.m];
+      if (e.s) lines.push("  stack: " + e.s);
+      if (e.tr) lines.push("  trail: " + e.tr);
+      if (e.dev) lines.push("  device: " + e.dev);
+      return lines.join(nl);
+    }).join(nl + nl);
+  }
+
+  /** Fills the Diagnostic section from window.__diagLog. */
+  function renderDiag() {
+    var entries = Array.isArray(window.__diagLog) ? window.__diagLog : [];
+    document.getElementById("diagSummary").textContent = entries.length ? tf("diagCount", { n: entries.length }) : t("diagNone");
+    document.getElementById("diagDetails").hidden = entries.length === 0;
+    document.getElementById("diagText").value = formatDiag(entries);
+  }
+
+  /** Copies the journal to the clipboard (webviews vary: two attempts). */
+  function copyDiag() {
+    var area = document.getElementById("diagText");
+    var status = document.getElementById("diagCopyStatus");
+    area.focus();
+    area.select();
+    var copied = false;
+    try {
+      copied = document.execCommand("copy");
+    } catch (_error) {
+      copied = false;
+    }
+    if (copied) {
+      status.textContent = t("diagCopied");
+      return;
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(area.value).then(
+        () => { status.textContent = t("diagCopied"); },
+        () => { status.textContent = t("diagCopyFailed"); }
+      );
+    } else {
+      status.textContent = t("diagCopyFailed");
+    }
+  }
+
+  /** Asks pkjs to clear the journal (closes the page without saving). */
+  function clearDiag() {
+    if (!confirm(t("diagClearConfirm"))) return;
+    document.location = "pebblejs://close#" + encodeURIComponent(JSON.stringify({ action: "clearDiag" }));
+  }
+
   /** Validates the form, then closes the webview with the config as JSON. */
   function save() {
     var stops = collectStops();
@@ -1280,6 +1372,7 @@
     document.getElementById("language").value = choice;
     lang = resolveLanguage(choice);
     applyStaticTranslations();
+    renderDiag();
     updateCount();
     if (!initial) return;
     document.getElementById("apiKey").value = initial.apiKey || "";

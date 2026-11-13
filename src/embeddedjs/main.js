@@ -62,6 +62,169 @@ function t(key, n) {
 	return n === undefined ? str : str.replace("{n}", String(n));
 }
 
+// --- Diagnostics ---
+// Store builds can't be debugged live: there is no xsbug on Pebble and
+// nobody is watching `pebble logs` when a crash happens. An exception thrown
+// from anything the runtime calls back into (AppMessage, timers, buttons) is
+// fatal -- Alloy aborts the app ("Alloy: Fatal Error") -- and XS reports a
+// bad call as a bare "call: not a function", naming neither the function nor
+// the line. So every such entry point runs through safe()/run() below, which
+// keep the app alive and record the error in a small journal instead: the
+// entry point's name, the message, the stack when XS has one, and a trail of
+// the last events. The journal lives in the watch's localStorage until it
+// reaches pkjs (see tryWriteDiag), which keeps it for the config page's
+// Diagnostic section.
+
+const DIAG_LOG_KEY = "diagLog";
+const DIAG_SESSION_KEY = "diagSession";
+const DIAG_MAX_ENTRIES = 5;
+const DIAG_MAX_TRAIL = 12;
+// Fits easily in one AppMessage (the outbox is several KB).
+const DIAG_MAX_TEXT = 2000;
+
+const trail = [];
+
+/** @param {string} event - Short ASCII label, kept in the trail of recent events. */
+function note(event) {
+	trail.push(event);
+	if (trail.length > DIAG_MAX_TRAIL) trail.shift();
+}
+
+/** @returns {string|null} localStorage value, null if missing or unreadable. */
+function storageGet(key) {
+	try {
+		return localStorage.getItem(key);
+	} catch {
+		return null;
+	}
+}
+
+/** localStorage write that never throws (diagnostics must not crash the app). */
+function storageSet(key, value) {
+	try {
+		localStorage.setItem(key, value);
+	} catch (error) {
+		console.log(`storage write failed for ${key}: ${error}`);
+	}
+}
+
+/** localStorage delete that never throws. */
+function storageRemove(key) {
+	try {
+		localStorage.removeItem(key);
+	} catch (error) {
+		console.log(`storage delete failed for ${key}: ${error}`);
+	}
+}
+
+/** @returns {object[]} Journal entries not yet handed to pkjs. */
+function loadDiagLog() {
+	const raw = storageGet(DIAG_LOG_KEY);
+	if (!raw) return [];
+	try {
+		const list = JSON.parse(raw);
+		return Array.isArray(list) ? list : [];
+	} catch {
+		return [];
+	}
+}
+
+// True while the journal holds entries pkjs hasn't received yet.
+let diagPending = false;
+
+/**
+ * Appends one entry to the journal (the oldest ones go past DIAG_MAX_ENTRIES).
+ * @param {string} where - Entry point that failed.
+ * @param {*} message
+ * @param {*} [stack]
+ */
+function recordDiag(where, message, stack) {
+	try {
+		const log = loadDiagLog();
+		log.push({
+			t: Date.now(),
+			w: where,
+			m: String(message).slice(0, 200),
+			s: stack ? String(stack).slice(0, 300) : "",
+			tr: trail.join(" > "),
+		});
+		while (log.length > DIAG_MAX_ENTRIES) log.shift();
+		storageSet(DIAG_LOG_KEY, JSON.stringify(log));
+		diagPending = true;
+		console.log(`diag ${where}: ${message}`);
+	} catch (error) {
+		console.log(`diag record failed: ${error}`);
+	}
+}
+
+/** Records `error` and tries to hand the journal to pkjs right away. */
+function reportError(where, error) {
+	// biome-ignore lint/complexity/useOptionalChain: no `?.` on this XS build, see requestRefresh
+	recordDiag(where, error, error && error.stack);
+	try {
+		flushRefreshQueue(); // sends the journal first, if the slot is free
+	} catch (flushError) {
+		console.log(`diag flush failed: ${flushError}`);
+	}
+}
+
+/**
+ * @param {string} where - Name recorded if `fn` throws.
+ * @param {Function} fn
+ * @returns {Function} `fn` with the same `this` and arguments, recording
+ *   instead of propagating any exception (which would abort the app).
+ */
+function safe(where, fn) {
+	return function (...args) {
+		try {
+			return fn.apply(this, args);
+		} catch (error) {
+			reportError(where, error);
+			return undefined;
+		}
+	};
+}
+
+/**
+ * Runs `fn` now, recording instead of propagating any exception.
+ * @param {string} where
+ * @param {Function} fn
+ * @param {*} [fallback] - Returned when `fn` throws.
+ */
+function run(where, fn, fallback) {
+	try {
+		return fn();
+	} catch (error) {
+		reportError(where, error);
+		return fallback;
+	}
+}
+
+// How far the previous launch got. Written at a few milestones only (flash
+// wear): "boot" at launch, "ready" once the config is loaded, "ok" a little
+// later, "exit" when Back closes the app. A launch left at "boot" or "ready"
+// was cut short during startup -- the trace of what safe() can't catch: an
+// engine abort (memory full), a native fault, a frozen watch that had to be
+// restarted.
+const SESSION_OK_DELAY_MS = 20000;
+const previousSession = storageGet(DIAG_SESSION_KEY);
+if (previousSession === "boot" || previousSession === "ready") {
+	recordDiag(
+		"previousLaunch",
+		`stopped at "${previousSession}" (crash, freeze, or closed while loading)`
+	);
+}
+let sessionStage = "";
+
+/** @param {"boot"|"ready"|"ok"|"exit"} stage */
+function markSession(stage) {
+	if (sessionStage === stage) return;
+	sessionStage = stage;
+	storageSet(DIAG_SESSION_KEY, stage);
+}
+markSession("boot");
+diagPending = loadDiagLog().length > 0;
+
 // --- Config state ---
 // Populated from AppMessage items sent by pkjs's sendConfigToWatch() (see
 // src/pkjs/index.js). Items arrive one at a time, not batched: pkjs chains
@@ -140,6 +303,7 @@ const ALL_MESSAGE_KEYS = [
 	"staleReason",
 	"staleAge",
 	"pauseMinutes",
+	"diagText",
 ];
 const MESSAGE_KEY_CODES = new Map(
 	ALL_MESSAGE_KEYS.map((key, index) => [key, 10000 + index])
@@ -191,14 +355,16 @@ const configMessageKeys = [
 
 const configMessage = new Message({
 	keys: messageKeyMap(configMessageKeys),
-	onReadable() {
+	onReadable: safe("config.onReadable", function () {
 		const msg = this.read();
+		if (!msg) return; // nothing queued
 		const item = {};
 		msg.forEach((value, key) => {
 			item[key] = value;
 		});
+		note(`rx ${item.itemType} ${item.itemIndex}`);
 		handleConfigItem(item);
-	},
+	}),
 });
 
 // Task 8b: reconciliation safety net, on top of the pkjs-side send-gap fix
@@ -232,7 +398,7 @@ const MAX_CONFIG_RESENDS = 3;
 function scheduleConfigResendTimeout() {
 	if (configResendTimer !== null) return; // already scheduled
 	configResendTimer = setTimeout(
-		onConfigResendTimeout,
+		safe("configResendTimeout", onConfigResendTimeout),
 		CONFIG_RESEND_TIMEOUT_MS
 	);
 }
@@ -261,6 +427,7 @@ function onConfigResendTimeout() {
 		return;
 	}
 	configResendCount++;
+	note(`resend ${configResendCount}`);
 	console.log(
 		"configResendRequest: attempt " +
 			configResendCount +
@@ -396,6 +563,7 @@ const departureMessageKeys = [
 	"staleReason",
 	"staleAge",
 	"pauseMinutes",
+	"diagText",
 ];
 
 // Same Message instance handles both directions of this protocol (receive
@@ -404,12 +572,14 @@ const departureMessageKeys = [
 // not a plain object.
 const departureMessage = new Message({
 	keys: messageKeyMap(departureMessageKeys),
-	onReadable() {
+	onReadable: safe("departure.onReadable", function () {
 		const msg = this.read();
+		if (!msg) return; // nothing queued
 		const item = {};
 		msg.forEach((value, key) => {
 			item[key] = value;
 		});
+		note(`rx ${item.itemType} ${item.state}`);
 		if (item.itemType !== "departureUpdate") return;
 
 		if (typeof item.quotaRemaining === "number") {
@@ -427,10 +597,13 @@ const departureMessage = new Message({
 		if (elapsed >= MIN_REFRESH_INDICATOR_MS) {
 			clearPendingRefresh(key);
 		} else {
-			setTimeout(() => {
-				clearPendingRefresh(key);
-				renderCurrentScreen();
-			}, MIN_REFRESH_INDICATOR_MS - elapsed);
+			setTimeout(
+				safe("spinnerHoldTimeout", () => {
+					clearPendingRefresh(key);
+					renderCurrentScreen();
+				}),
+				MIN_REFRESH_INDICATOR_MS - elapsed
+			);
 		}
 		// During a call-guard pause, a network failure or an exceeded quota,
 		// keep the last good times on screen (with their age and the reason,
@@ -482,7 +655,7 @@ const departureMessage = new Message({
 			mission2: item.mission2 || "",
 		});
 		renderCurrentScreen();
-	},
+	}),
 	// Sending departureMessage.write() back-to-back in a tight loop (one per
 	// tracked stop) throws "Error: not writable" and crashes the app
 	// (fxAbort) the moment a second write lands before the first is
@@ -497,9 +670,9 @@ const departureMessage = new Message({
 	// contract is try-then-retry: call write() speculatively, catch the
 	// "not writable" throw if the single outbound slot is still busy, and
 	// let onWritable's firing (once the slot frees up) drive the retry.
-	onWritable() {
+	onWritable: safe("departure.onWritable", () => {
 		flushRefreshQueue();
-	},
+	}),
 });
 
 let refreshTimer = null;
@@ -541,11 +714,55 @@ let spinnerTimer = null;
 /** Starts the spinner animation tick, once. Re-renders only while something is actually pending. */
 function startSpinnerTimer() {
 	if (spinnerTimer) return;
-	spinnerTimer = setInterval(() => {
-		if (pendingRefreshStops.size === 0) return;
-		spinnerFrame = (spinnerFrame + 1) % SPINNER_FRAMES.length;
-		renderCurrentScreen();
-	}, 250);
+	spinnerTimer = setInterval(
+		safe("spinnerTick", () => {
+			if (pendingRefreshStops.size === 0) return;
+			spinnerFrame = (spinnerFrame + 1) % SPINNER_FRAMES.length;
+			renderCurrentScreen();
+		}),
+		250
+	);
+}
+
+/**
+ * @param {*} error - What Message.write() threw.
+ * @returns {boolean} True when it only means the single outbound slot is
+ *   busy (retry on onWritable). Anything else ("unexpected value",
+ *   "overflow"...) would fail again on every retry and block the queue.
+ */
+function isBusyWriteError(error) {
+	const text = String(error);
+	return text.includes("not writable") || text.includes("output_begin");
+}
+
+/**
+ * Hands the journal to pkjs (itemType "diagReport"), oldest entries dropped
+ * if it doesn't fit in one message.
+ * @returns {boolean} False only when the outbound slot is busy.
+ */
+function tryWriteDiag() {
+	const log = loadDiagLog();
+	if (log.length === 0) {
+		diagPending = false;
+		return true;
+	}
+	let text = JSON.stringify(log);
+	while (text.length > DIAG_MAX_TEXT && log.length > 1) {
+		log.shift();
+		text = JSON.stringify(log);
+	}
+	const m = new Map();
+	m.set("itemType", "diagReport");
+	m.set("diagText", text);
+	try {
+		departureMessage.write(m);
+	} catch (error) {
+		if (isBusyWriteError(error)) return false;
+		console.log(`diag write failed, journal dropped: ${error}`);
+	}
+	storageRemove(DIAG_LOG_KEY);
+	diagPending = false;
+	return true;
 }
 
 /**
@@ -564,14 +781,23 @@ function tryWriteRefreshStop(stop) {
 	if (stop.destStopRef) m.set("destStopRef", stop.destStopRef);
 	try {
 		departureMessage.write(m);
+		note("tx refreshStop");
 		return true;
-	} catch {
-		return false;
+	} catch (error) {
+		if (isBusyWriteError(error)) return false;
+		// Dropped rather than retried forever: recorded, and the next refresh
+		// queues it again.
+		recordDiag("refreshStop.write", error);
+		return true;
 	}
 }
 
-/** Drains refreshQueue while the single outbound AppMessage slot is free. */
+/**
+ * Drains the journal, then refreshQueue, while the single outbound
+ * AppMessage slot is free.
+ */
 function flushRefreshQueue() {
+	if (diagPending && !tryWriteDiag()) return; // wait for onWritable to retry
 	while (refreshQueue.length > 0) {
 		if (!tryWriteRefreshStop(refreshQueue[0])) break; // wait for onWritable to retry
 		refreshQueue.shift();
@@ -635,12 +861,15 @@ function requestRefresh(manual, navigation) {
 	pendingRefreshStops.add(key);
 	renderCurrentScreen(); // shows the spinner marker immediately
 	flushRefreshQueue();
-	setTimeout(() => {
-		if (pendingRefreshStops.has(key)) {
-			clearPendingRefresh(key);
-			renderCurrentScreen();
-		}
-	}, REFRESH_INDICATOR_TIMEOUT_MS);
+	setTimeout(
+		safe("refreshIndicatorTimeout", () => {
+			if (pendingRefreshStops.has(key)) {
+				clearPendingRefresh(key);
+				renderCurrentScreen();
+			}
+		}),
+		REFRESH_INDICATOR_TIMEOUT_MS
+	);
 }
 
 // Upper end of the project's 30-60s refresh rule: the PRIM quota is the
@@ -650,7 +879,13 @@ const REFRESH_INTERVAL_MS = 60000;
 /** Starts the foreground departure-refresh timer, once. */
 function startRefreshTimer() {
 	if (refreshTimer) return;
-	refreshTimer = setInterval(() => requestRefresh(false), REFRESH_INTERVAL_MS);
+	refreshTimer = setInterval(
+		safe("refreshTick", () => {
+			note("tick");
+			requestRefresh(false);
+		}),
+		REFRESH_INTERVAL_MS
+	);
 }
 
 const previousOnConfigReady = onConfigReady;
@@ -672,6 +907,15 @@ onConfigReady = () => {
 	// than waiting for the refresh timer's first tick.
 	renderCurrentScreen();
 	requestRefresh();
+	if (sessionStage === "boot") {
+		markSession("ready");
+		setTimeout(
+			safe("sessionOk", () => {
+				if (sessionStage === "ready") markSession("ok");
+			}),
+			SESSION_OK_DELAY_MS
+		);
+	}
 };
 
 // --- Piu UI — single screen ---
@@ -762,11 +1006,13 @@ let selectedIndex = 0;
 /** Hardware-button routing for the app's single Application/root Container. */
 class MainBehavior extends Behavior {
 	onPressUp() {
-		this.step(-1);
+		note("btn up");
+		run("onPressUp", () => this.step(-1));
 		return true;
 	}
 	onPressDown() {
-		this.step(1);
+		note("btn down");
+		run("onPressDown", () => this.step(1));
 		return true;
 	}
 	onPressSelect() {
@@ -777,17 +1023,25 @@ class MainBehavior extends Behavior {
 		// physical press.
 		if (this.selectDown) return true;
 		this.selectDown = true;
-		const item = buildItemList()[selectedIndex];
-		// Deliberately not `item?.type` -- see requestRefresh()'s comment on
-		// this exact pattern (broken optional-chaining on this XS engine).
-		// biome-ignore lint/complexity/useOptionalChain: see comment above
-		if (!item || item.type !== "stop") return true;
-		requestRefresh(true);
+		note("btn select");
+		run("onPressSelect", () => {
+			const item = buildItemList()[selectedIndex];
+			// Deliberately not `item?.type` -- see requestRefresh()'s comment on
+			// this exact pattern (broken optional-chaining on this XS engine).
+			// biome-ignore lint/complexity/useOptionalChain: see comment above
+			if (!item || item.type !== "stop") return;
+			requestRefresh(true);
+		});
 		return true;
 	}
 	onReleaseSelect() {
 		this.selectDown = false;
 		return true;
+	}
+	/** Not consumed (returns false): the OS then closes the app as usual. */
+	onPressBack() {
+		markSession("exit");
+		return false;
 	}
 	/** Moves selectedIndex by `direction`, wrapping around, and re-fetches. */
 	step(direction) {
@@ -1127,14 +1381,22 @@ function buildDetailScreen() {
 	});
 }
 
-/** Rebuilds the Application's content from scratch (single-screen app). */
+/**
+ * Rebuilds the Application's content from scratch (single-screen app). The
+ * new screen is built before the old one is removed, so a failing build
+ * leaves the previous screen up instead of a blank one; the failure is
+ * recorded under "render" rather than under whichever callback asked for it.
+ */
 function renderCurrentScreen() {
-	application.empty();
-	application.add(buildDetailScreen());
+	run("render", () => {
+		const content = buildDetailScreen();
+		application.empty();
+		application.add(content);
+	});
 }
 
 renderCurrentScreen();
-startSpinnerTimer();
+run("startSpinnerTimer", startSpinnerTimer);
 
 // Ask for config immediately at boot, rather than passively waiting on
 // pkjs's own unprompted "ready" push (2026-08-19, real-device evidence):
@@ -1149,4 +1411,4 @@ startSpinnerTimer();
 // scheduling a delayed first attempt; it still arms the same
 // CONFIG_RESEND_TIMEOUT_MS-spaced retries (up to MAX_CONFIG_RESENDS) as a
 // fallback if this first request is itself dropped.
-onConfigResendTimeout();
+run("bootConfigRequest", onConfigResendTimeout);

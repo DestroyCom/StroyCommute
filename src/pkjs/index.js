@@ -63,6 +63,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
   .moveButtons { display: flex; gap: 6px; margin-right: auto; }
   .moveBtn { background: #444; padding: 8px 14px; font-size: 15px; line-height: 1; }
   .moveBtn:disabled { opacity: 0.3; }
+  #diagText { width: 100%; margin-top: 8px; padding: 8px; font-family: monospace; font-size: 12px; background: #111; color: #ddd; border: 1px solid #444; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .diagButtons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -144,6 +146,22 @@ const CONFIG_HTML = `<!DOCTYPE html>
     </div>
   </fieldset>
 
+  <!-- Error journal: filled from window.__diagLog (see buildConfigDataUri in
+       src/pkjs/index.js). Stays on the phone; the user copies it by hand. -->
+  <fieldset>
+    <legend data-i18n="diagLegend">Diagnostic</legend>
+    <div class="searchStatus" id="diagSummary"></div>
+    <details class="help" id="diagDetails" hidden>
+      <summary data-i18n="diagShow">Voir le journal</summary>
+      <textarea id="diagText" rows="10" readonly></textarea>
+      <div class="diagButtons">
+        <button type="button" onclick="copyDiag()" data-i18n="diagCopy">Copier</button>
+        <button type="button" class="remove" onclick="clearDiag()" data-i18n="diagClear">Effacer le journal</button>
+      </div>
+      <div class="searchStatus" id="diagCopyStatus"></div>
+    </details>
+  </fieldset>
+
   <p id="itemCount"></p>
   <button type="button" onclick="save()" data-i18n="save">Enregistrer</button>
 
@@ -206,6 +224,15 @@ const CONFIG_HTML = `<!DOCTYPE html>
       guardWindow: "W (minutes)",
       guardPause: "P (pause, minutes)",
       guardInvalid: "Garde-fou : N doit être 0 ou au moins 2, W et P au moins 1.",
+      diagLegend: "Diagnostic",
+      diagNone: "Aucune erreur enregistrée.",
+      diagCount: "{n} erreur(s) enregistrée(s). En cas de souci, copie le journal et envoie-le au développeur.",
+      diagShow: "Voir le journal",
+      diagCopy: "Copier",
+      diagCopied: "Journal copié.",
+      diagCopyFailed: "Copie impossible : sélectionne le texte à la main.",
+      diagClear: "Effacer le journal",
+      diagClearConfirm: "Effacer le journal ? La page se fermera sans enregistrer tes autres modifications.",
       add: "Ajouter",
       cancel: "Annuler",
       searching: "Recherche...",
@@ -269,6 +296,15 @@ const CONFIG_HTML = `<!DOCTYPE html>
       guardWindow: "W (minutes)",
       guardPause: "P (pause, minutes)",
       guardInvalid: "Call guard: N must be 0 or at least 2, W and P at least 1.",
+      diagLegend: "Diagnostics",
+      diagNone: "No error recorded.",
+      diagCount: "{n} error(s) recorded. If something goes wrong, copy the log and send it to the developer.",
+      diagShow: "Show the log",
+      diagCopy: "Copy",
+      diagCopied: "Log copied.",
+      diagCopyFailed: "Can't copy: select the text by hand.",
+      diagClear: "Clear the log",
+      diagClearConfirm: "Clear the log? The page will close without saving your other changes.",
       add: "Add",
       cancel: "Cancel",
       searching: "Searching...",
@@ -336,6 +372,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
   function onLanguageChange() {
     lang = resolveLanguage(document.getElementById("language").value);
     applyStaticTranslations();
+    renderDiag();
     var stops = collectStops();
     var lines = collectLines();
     document.getElementById("stopsList").innerHTML = "";
@@ -1237,6 +1274,61 @@ const CONFIG_HTML = `<!DOCTYPE html>
     return { maxCalls: maxCalls, windowMinutes: windowMinutes, pauseMinutes: pauseMinutes };
   }
 
+  /**
+   * @param {object[]} entries - Error journal entries (see src/pkjs/diag.js).
+   * @returns {string} One readable block per entry, most recent first.
+   */
+  function formatDiag(entries) {
+    var nl = String.fromCharCode(10); // no backslash escapes: this page is embedded in a template literal
+    return entries.slice().reverse().map((e) => {
+      var lines = [new Date(e.t).toLocaleString() + " [" + (e.src || "?") + "] " + e.w + ": " + e.m];
+      if (e.s) lines.push("  stack: " + e.s);
+      if (e.tr) lines.push("  trail: " + e.tr);
+      if (e.dev) lines.push("  device: " + e.dev);
+      return lines.join(nl);
+    }).join(nl + nl);
+  }
+
+  /** Fills the Diagnostic section from window.__diagLog. */
+  function renderDiag() {
+    var entries = Array.isArray(window.__diagLog) ? window.__diagLog : [];
+    document.getElementById("diagSummary").textContent = entries.length ? tf("diagCount", { n: entries.length }) : t("diagNone");
+    document.getElementById("diagDetails").hidden = entries.length === 0;
+    document.getElementById("diagText").value = formatDiag(entries);
+  }
+
+  /** Copies the journal to the clipboard (webviews vary: two attempts). */
+  function copyDiag() {
+    var area = document.getElementById("diagText");
+    var status = document.getElementById("diagCopyStatus");
+    area.focus();
+    area.select();
+    var copied = false;
+    try {
+      copied = document.execCommand("copy");
+    } catch (_error) {
+      copied = false;
+    }
+    if (copied) {
+      status.textContent = t("diagCopied");
+      return;
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(area.value).then(
+        () => { status.textContent = t("diagCopied"); },
+        () => { status.textContent = t("diagCopyFailed"); }
+      );
+    } else {
+      status.textContent = t("diagCopyFailed");
+    }
+  }
+
+  /** Asks pkjs to clear the journal (closes the page without saving). */
+  function clearDiag() {
+    if (!confirm(t("diagClearConfirm"))) return;
+    document.location = "pebblejs://close#" + encodeURIComponent(JSON.stringify({ action: "clearDiag" }));
+  }
+
   /** Validates the form, then closes the webview with the config as JSON. */
   function save() {
     var stops = collectStops();
@@ -1290,6 +1382,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
     document.getElementById("language").value = choice;
     lang = resolveLanguage(choice);
     applyStaticTranslations();
+    renderDiag();
     updateCount();
     if (!initial) return;
     document.getElementById("apiKey").value = initial.apiKey || "";
@@ -1389,9 +1482,10 @@ function buildConfigDataUri() {
 	// Resolved here rather than from the webview's navigator.language so the
 	// page's "auto" matches what the watch shows (see resolveLanguage).
 	const watchLanguage = JSON.stringify(resolveLanguage("auto"));
+	const diagLog = JSON.stringify(loadDiag()).replace(/</g, "\\u003c");
 	const html = CONFIG_HTML.replace(
 		"<script>",
-		`<script>window.__initialConfig = ${injected}; window.__watchLanguage = ${watchLanguage};`
+		`<script>window.__initialConfig = ${injected}; window.__watchLanguage = ${watchLanguage}; window.__diagLog = ${diagLog};`
 	);
 	return `data:text/html;charset=utf-8;base64,${utf8ToBase64(html)}`;
 }
@@ -1404,6 +1498,76 @@ const {
 	callGuardSettingsChanged,
 	staleExtra,
 } = require("./trips");
+const { parseWatchDiag, mergeDiagEntries } = require("./diag");
+
+// --- Error journal (config page > Diagnostic) ---
+// Collects the watch's own journal (diagReport messages) and pkjs's
+// exceptions, so a crash in the field can be read afterwards without a
+// debugger or a live `pebble logs`. Stays on the phone: nothing is uploaded.
+const DIAG_KEY = "stroycommuteDiag";
+
+/** @returns {object[]} Stored journal entries, [] if none/garbled. */
+function loadDiag() {
+	try {
+		const list = JSON.parse(localStorage.getItem(DIAG_KEY) || "[]");
+		return Array.isArray(list) ? list : [];
+	} catch (_error) {
+		return [];
+	}
+}
+
+/** @param {object[]} entries - Added to the stored journal. */
+function storeDiag(entries) {
+	if (entries.length === 0) return;
+	localStorage.setItem(
+		DIAG_KEY,
+		JSON.stringify(mergeDiagEntries(loadDiag(), entries))
+	);
+}
+
+/** @returns {string} e.g. "emery fw 4.9.1", "" if unavailable. */
+function watchDescription() {
+	try {
+		const info = Pebble.getActiveWatchInfo();
+		const fw = info.firmware;
+		return `${info.platform} fw ${fw.major}.${fw.minor}.${fw.patch}${fw.suffix ? `-${fw.suffix}` : ""}`;
+	} catch (_error) {
+		return "";
+	}
+}
+
+/**
+ * Records a pkjs exception in the journal. Never throws.
+ * @param {string} where
+ * @param {*} error
+ */
+function recordPhoneError(where, error) {
+	console.log(`error in ${where}: ${error}`);
+	try {
+		const entry = { t: Date.now(), src: "phone", w: where, m: String(error) };
+		// biome-ignore lint/complexity/useOptionalChain: no `?.` in pkjs (webpack 1)
+		if (error && error.stack) entry.s = String(error.stack).slice(0, 500);
+		storeDiag([entry]);
+	} catch (storeError) {
+		console.log(`journal write failed: ${storeError}`);
+	}
+}
+
+/**
+ * @param {string} where - Recorded if `fn` throws.
+ * @param {Function} fn
+ * @returns {Function} `fn`, recording instead of propagating exceptions.
+ */
+function guarded(where, fn) {
+	return function (...args) {
+		try {
+			return fn.apply(this, args);
+		} catch (error) {
+			recordPhoneError(where, error);
+			return undefined;
+		}
+	};
+}
 
 // Shared by the initial "ready" send and the Task 8b configResendRequest
 // handler below -- both just need "resend whatever's currently persisted,
@@ -1465,11 +1629,21 @@ function sendStoredConfigToWatch() {
 }
 
 Pebble.addEventListener("ready", moddableProxy.readyReceived);
-Pebble.addEventListener("appmessage", (e) => {
-	if (moddableProxy.appMessageReceived(e)) return;
-	if (e.payload.itemType === "refreshStop") {
-		handleRefreshStop(e.payload);
-	} else if (e.payload.itemType === "configResendRequest") {
+Pebble.addEventListener(
+	"appmessage",
+	guarded("appmessage", (e) => {
+		if (moddableProxy.appMessageReceived(e)) return;
+		handleAppMessage(e.payload);
+	})
+);
+
+/** @param {object} payload - A watch AppMessage not meant for the proxy. */
+function handleAppMessage(payload) {
+	if (payload.itemType === "refreshStop") {
+		handleRefreshStop(payload);
+	} else if (payload.itemType === "diagReport") {
+		storeDiag(parseWatchDiag(payload.diagText, watchDescription()));
+	} else if (payload.itemType === "configResendRequest") {
 		// Task 8b reconciliation: the watch didn't see a complete config
 		// within its timeout and is asking for a fresh full resend. Reuse
 		// sendConfigToWatch() as-is -- handleConfigItem already resets
@@ -1477,15 +1651,31 @@ Pebble.addEventListener("appmessage", (e) => {
 		// mid-session is safe.
 		sendStoredConfigToWatch();
 	}
-});
+}
 
-Pebble.addEventListener("showConfiguration", () => {
-	Pebble.openURL(buildConfigDataUri());
-});
+Pebble.addEventListener(
+	"showConfiguration",
+	guarded("showConfiguration", () => {
+		Pebble.openURL(buildConfigDataUri());
+	})
+);
 
-Pebble.addEventListener("webviewclosed", (e) => {
-	if (!e.response) return;
-	const config = JSON.parse(decodeURIComponent(e.response));
+Pebble.addEventListener(
+	"webviewclosed",
+	guarded("webviewclosed", (e) => {
+		if (!e.response) return;
+		const config = JSON.parse(decodeURIComponent(e.response));
+		// Config page > Diagnostic > Clear: closes without saving the settings.
+		if (config.action === "clearDiag") {
+			localStorage.removeItem(DIAG_KEY);
+			return;
+		}
+		saveConfig(config);
+	})
+);
+
+/** @param {object} config - The config page's saved settings. */
+function saveConfig(config) {
 	const previous = localStorage.getItem("stroycommuteConfig");
 	const previousGuard = previous ? JSON.parse(previous).callGuard : undefined;
 	// New guard settings apply right away: a pause started under the old
@@ -1495,7 +1685,7 @@ Pebble.addEventListener("webviewclosed", (e) => {
 	}
 	localStorage.setItem("stroycommuteConfig", JSON.stringify(config));
 	sendConfigToWatch(config);
-});
+}
 
 /**
  * @param {string} hhmm - Time in "HH:MM" form, e.g. "07:30".
@@ -1639,7 +1829,10 @@ function sendItemsSequentially(items, index, retriesLeft) {
 	);
 }
 
-Pebble.addEventListener("ready", sendStoredConfigToWatch);
+Pebble.addEventListener(
+	"ready",
+	guarded("ready.sendStoredConfig", sendStoredConfigToWatch)
+);
 
 // --- Departures — PRIM stop-monitoring fetch/parse/convert ---
 //
@@ -1793,7 +1986,7 @@ function fetchStopVisits(apiKey, stopRef, lineRef, done) {
 	const xhr = new XMLHttpRequest();
 	xhr.open("GET", url, true);
 	xhr.setRequestHeader("apiKey", apiKey);
-	xhr.onload = () => {
+	xhr.onload = guarded("stop-monitoring.onload", () => {
 		if (xhr.status === 429) return done("quotaExceeded");
 		if (xhr.status === 401 || xhr.status === 403) return done("invalidKey");
 		if (xhr.status === 400 || xhr.status === 404) {
@@ -1811,8 +2004,8 @@ function fetchStopVisits(apiKey, stopRef, lineRef, done) {
 			return done("network");
 		}
 		done("ok", visits);
-	};
-	xhr.onerror = () => done("network");
+	});
+	xhr.onerror = guarded("stop-monitoring.onerror", () => done("network"));
 	lastQuotaRemaining = recordPrimRequestAndGetQuotaRemaining();
 	xhr.send();
 }
