@@ -160,6 +160,12 @@ const CONFIG_HTML = `<!DOCTYPE html>
     <div class="searchStatus" data-i18n="vibrateHint">Seulement quand l'app est ouverte sur l'arrêt concerné, une fois par départ.</div>
   </fieldset>
 
+  <fieldset>
+    <legend data-i18n="pluginLegend">Cadrans</legend>
+    <label><input type="checkbox" id="pluginEnabled" checked> <span data-i18n="pluginLabel">Partager mes prochains départs avec les cadrans</span></label>
+    <div class="searchStatus" data-i18n="pluginHint">Pour les cadrans compatibles avec les plugins Pebble (aperçu à activer dans l'app Pebble : Réglages, Plugins). Mise à jour toutes les 2 minutes au plus, pour tes 3 premiers trajets, et plus du tout quand il reste moins de 300 appels PRIM dans la journée.</div>
+  </fieldset>
+
   <!-- Error journal: filled from window.__diagLog (see buildConfigDataUri in
        src/pkjs/index.js). Stays on the phone; the user copies it by hand. -->
   <fieldset>
@@ -242,6 +248,9 @@ const CONFIG_HTML = `<!DOCTYPE html>
       vibrateLabel: "Vibrer quand le prochain départ est à :",
       vibrateOff: "Jamais",
       vibrateHint: "Seulement quand l'app est ouverte sur l'arrêt concerné, une fois par départ.",
+      pluginLegend: "Cadrans",
+      pluginLabel: "Partager mes prochains départs avec les cadrans",
+      pluginHint: "Pour les cadrans compatibles avec les plugins Pebble (aperçu à activer dans l'app Pebble : Réglages, Plugins). Mise à jour toutes les 2 minutes au plus, pour tes 3 premiers trajets, et plus du tout quand il reste moins de 300 appels PRIM dans la journée.",
       diagLegend: "Diagnostic",
       diagNone: "Aucune erreur enregistrée.",
       diagCount: "{n} erreur(s) enregistrée(s). En cas de souci, copie le journal et envoie-le au développeur.",
@@ -318,6 +327,9 @@ const CONFIG_HTML = `<!DOCTYPE html>
       vibrateLabel: "Vibrate when the next departure is:",
       vibrateOff: "Never",
       vibrateHint: "Only while the app is open on that stop, once per departure.",
+      pluginLegend: "Watchfaces",
+      pluginLabel: "Share my next departures with watchfaces",
+      pluginHint: "For watchfaces that use Pebble plugins (a preview to turn on in the Pebble app: Settings, Plugins). Updated every 2 minutes at most, for your first 3 trips, and no more once fewer than 300 PRIM calls are left for the day.",
       diagLegend: "Diagnostics",
       diagNone: "No error recorded.",
       diagCount: "{n} error(s) recorded. If something goes wrong, copy the log and send it to the developer.",
@@ -1388,6 +1400,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
       timelineEnabled: document.getElementById("timelineEnabled").checked,
       callGuard: callGuard,
       vibrateMinutes: parseInt(document.getElementById("vibrateMinutes").value, 10) || 0,
+      pluginEnabled: document.getElementById("pluginEnabled").checked,
       language: document.getElementById("language").value
     };
     var json = JSON.stringify(config);
@@ -1426,6 +1439,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
     }
     document.getElementById("timelineEnabled").checked = !!initial.timelineEnabled;
     document.getElementById("vibrateMinutes").value = String(initial.vibrateMinutes || 0);
+    document.getElementById("pluginEnabled").checked = initial.pluginEnabled !== false;
     var guard = initial.callGuard || {};
     if (typeof guard.maxCalls === "number") document.getElementById("guardMaxCalls").value = guard.maxCalls;
     if (typeof guard.windowMinutes === "number") document.getElementById("guardWindow").value = guard.windowMinutes;
@@ -1520,7 +1534,8 @@ const {
 	decideCallGuard,
 	callGuardSettingsChanged,
 	staleExtra,
-	callTimeMs,
+	journeyDestinationName,
+	rankDepartures,
 } = require("./trips");
 const { watchLineColors } = require("./colors");
 const { parseWatchDiag, mergeDiagEntries } = require("./diag");
@@ -1897,35 +1912,6 @@ Pebble.addEventListener(
 // key is read from localStorage (already persisted by webviewclosed above)
 // rather than carried on the wire — the watch never sees it.
 
-// pkjs has full Date support — this is why the UTC->minutes conversion
-// lives here, not in embeddedjs (see idfm-api-reference.md's UTC gotcha).
-/**
- * @param {object} call - A SIRI MonitoredCall.
- * @returns {number|null} Minutes from now until the call's best available
- *   time field, or null if none of them are usable. Real-hardware evidence
- *   (the "undefined min" bug): `ExpectedArrivalTime` is absent on some real
- *   PRIM calls -- e.g. a bus/tram still at its origin stop, which only
- *   reports a departure time -- which previously produced NaN here. NaN
- *   isn't a valid AppMessage tuple value; pkjs's sendAppMessage silently
- *   dropped the "minutes" key rather than throwing, so the watch decoded a
- *   `state: "ok"` update with no minutes field at all -- rendering the
- *   literal string "undefined min". Falling back across the other SIRI time
- *   fields, and returning null instead of NaN when truly none are present,
- *   fixes it at the source: the caller sends `state: "noRealtimeData"`
- *   instead (an already-handled UI state) rather than a broken "ok".
- */
-function callMinutesRemaining(call) {
-	const timeField =
-		call.ExpectedArrivalTime ||
-		call.ExpectedDepartureTime ||
-		call.AimedArrivalTime ||
-		call.AimedDepartureTime;
-	if (!timeField) return null;
-	const expected = new Date(timeField);
-	const minutes = Math.round((expected.getTime() - Date.now()) / 60000);
-	return Number.isNaN(minutes) ? null : minutes;
-}
-
 // Dev-only escape hatch: real PRIM calls are quota-limited (a handful of
 // requests can exhaust a day's quota), which otherwise blocks all
 // front-end/UI iteration whenever the quota's already spent. When true,
@@ -1963,27 +1949,6 @@ function recordPrimRequestAndGetQuotaRemaining() {
 	state.count += 1;
 	localStorage.setItem("stroycommuteQuota", JSON.stringify(state));
 	return Math.max(0, PRIM_DAILY_QUOTA - state.count);
-}
-
-/**
- * @param {object} journey - A SIRI MonitoredVehicleJourney.
- * @returns {string} Best available destination label, "" if none. SNCF
- *   (RER/Transilien) journeys don't always carry DestinationDisplay, and an
- *   empty array there used to throw inside the parse below -- surfacing as
- *   a bogus "network" error.
- */
-function journeyDestinationName(journey) {
-	const candidates = [
-		// biome-ignore lint/complexity/useOptionalChain: no `?.` in pkjs -- the SDK's webpack 1 bundler predates ES2020 syntax
-		(journey.MonitoredCall || {}).DestinationDisplay,
-		journey.DestinationName,
-		journey.DirectionName,
-	];
-	for (const list of candidates) {
-		const first = (list || [])[0] || {};
-		if (first.value) return first.value;
-	}
-	return "";
 }
 
 const STOP_MONITORING_URL =
@@ -2184,40 +2149,20 @@ function worstState(states) {
 
 /**
  * Turns already-filtered visits into the watch's "ok"/"noRealtimeData"
- * reply: drops visits without a usable time (the "undefined min" bug, see
- * callMinutesRemaining), sorts running trains first then at-stop first
- * then by minutes, and attaches the first two departures' mission codes.
+ * reply (ranking in rankDepartures, src/pkjs/trips.js: visits without a
+ * usable time are dropped, which once showed as "undefined min"), with the
+ * first two departures' times and mission codes.
  * @param {object[]} visits - MonitoredStopVisit list.
  * @param {string} lineName
  * @param {function(string, object=): void} reply
  */
 function replyWithDepartures(visits, lineName, reply) {
-	const departures = visits
-		.map((visit) => visit.MonitoredVehicleJourney)
-		.filter((journey) => journey && journey.MonitoredCall)
-		.map((journey) => {
-			const call = journey.MonitoredCall;
-			const atStop = call.VehicleAtStop === true;
-			const minutes = callMinutesRemaining(call);
-			const timeMs = callTimeMs(call);
-			return {
-				journey: journey,
-				// Epoch seconds: the watch counts the minutes down itself.
-				departTime: timeMs === null ? null : Math.floor(timeMs / 1000),
-				atStop: atStop,
-				cancelled: call.DepartureStatus === "cancelled",
-				// ExpectedArrivalTime can be slightly in the past before
-				// VehicleAtStop flips (real-hardware evidence) -- floor at 0.
-				minutes: minutes === null ? null : Math.max(0, minutes),
-				rank: atStop ? -1 : minutes,
-			};
+	const departures = rankDepartures(visits, Date.now()).map((d) =>
+		Object.assign(d, {
+			// Epoch seconds: the watch counts the minutes down itself.
+			departTime: d.timeMs === null ? null : Math.floor(d.timeMs / 1000),
 		})
-		.filter((d) => d.atStop || d.minutes !== null)
-		// Running trains first: a cancelled one is only shown when nothing
-		// else is announced, so it can't hide the real next departure.
-		.sort(
-			(a, b) => Number(a.cancelled) - Number(b.cancelled) || a.rank - b.rank
-		);
+	);
 
 	if (departures.length === 0) {
 		reply("noRealtimeData");

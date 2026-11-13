@@ -150,6 +150,12 @@
     <div class="searchStatus" data-i18n="vibrateHint">Seulement quand l'app est ouverte sur l'arrêt concerné, une fois par départ.</div>
   </fieldset>
 
+  <fieldset>
+    <legend data-i18n="pluginLegend">Cadrans</legend>
+    <label><input type="checkbox" id="pluginEnabled" checked> <span data-i18n="pluginLabel">Partager mes prochains départs avec les cadrans</span></label>
+    <div class="searchStatus" data-i18n="pluginHint">Pour les cadrans compatibles avec les plugins Pebble (aperçu à activer dans l'app Pebble : Réglages, Plugins). Mise à jour toutes les 2 minutes au plus, pour tes 3 premiers trajets, et plus du tout quand il reste moins de 300 appels PRIM dans la journée.</div>
+  </fieldset>
+
   <!-- Error journal: filled from window.__diagLog (see buildConfigDataUri in
        src/pkjs/index.js). Stays on the phone; the user copies it by hand. -->
   <fieldset>
@@ -232,6 +238,9 @@
       vibrateLabel: "Vibrer quand le prochain départ est à :",
       vibrateOff: "Jamais",
       vibrateHint: "Seulement quand l'app est ouverte sur l'arrêt concerné, une fois par départ.",
+      pluginLegend: "Cadrans",
+      pluginLabel: "Partager mes prochains départs avec les cadrans",
+      pluginHint: "Pour les cadrans compatibles avec les plugins Pebble (aperçu à activer dans l'app Pebble : Réglages, Plugins). Mise à jour toutes les 2 minutes au plus, pour tes 3 premiers trajets, et plus du tout quand il reste moins de 300 appels PRIM dans la journée.",
       diagLegend: "Diagnostic",
       diagNone: "Aucune erreur enregistrée.",
       diagCount: "{n} erreur(s) enregistrée(s). En cas de souci, copie le journal et envoie-le au développeur.",
@@ -308,6 +317,9 @@
       vibrateLabel: "Vibrate when the next departure is:",
       vibrateOff: "Never",
       vibrateHint: "Only while the app is open on that stop, once per departure.",
+      pluginLegend: "Watchfaces",
+      pluginLabel: "Share my next departures with watchfaces",
+      pluginHint: "For watchfaces that use Pebble plugins (a preview to turn on in the Pebble app: Settings, Plugins). Updated every 2 minutes at most, for your first 3 trips, and no more once fewer than 300 PRIM calls are left for the day.",
       diagLegend: "Diagnostics",
       diagNone: "No error recorded.",
       diagCount: "{n} error(s) recorded. If something goes wrong, copy the log and send it to the developer.",
@@ -1378,6 +1390,7 @@
       timelineEnabled: document.getElementById("timelineEnabled").checked,
       callGuard: callGuard,
       vibrateMinutes: parseInt(document.getElementById("vibrateMinutes").value, 10) || 0,
+      pluginEnabled: document.getElementById("pluginEnabled").checked,
       language: document.getElementById("language").value
     };
     var json = JSON.stringify(config);
@@ -1416,6 +1429,7 @@
     }
     document.getElementById("timelineEnabled").checked = !!initial.timelineEnabled;
     document.getElementById("vibrateMinutes").value = String(initial.vibrateMinutes || 0);
+    document.getElementById("pluginEnabled").checked = initial.pluginEnabled !== false;
     var guard = initial.callGuard || {};
     if (typeof guard.maxCalls === "number") document.getElementById("guardMaxCalls").value = guard.maxCalls;
     if (typeof guard.windowMinutes === "number") document.getElementById("guardWindow").value = guard.windowMinutes;

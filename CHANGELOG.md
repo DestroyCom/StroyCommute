@@ -11,6 +11,7 @@ version texte à coller dans le store.
 
 ### Nouveautés
 
+- Tes prochains départs peuvent s'afficher sur les cadrans compatibles avec les plugins Pebble (aperçu à activer dans l'app Pebble), avec une consommation de quota limitée. Réglage « Cadrans » pour le désactiver.
 - Compatible avec la Pebble Round 2 : mise en page adaptée à l'écran rond.
 - Vibration à l'approche du train, au choix de 1 à 10 minutes avant le départ (réglage « Vibration », désactivé par défaut).
 - La montre indique quand le téléphone est déconnecté, tout en gardant les derniers horaires affichés.

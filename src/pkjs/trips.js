@@ -100,6 +100,61 @@ function journeyMission(journey) {
 	return note && note.value ? note.value : "";
 }
 
+/**
+ * @param {object} journey - A SIRI MonitoredVehicleJourney.
+ * @returns {string} Best available destination label, "" if none. SNCF
+ *   (RER/Transilien) journeys don't always carry DestinationDisplay (missing
+ *   or an empty array): fall back to DestinationName, then DirectionName.
+ */
+function journeyDestinationName(journey) {
+	const candidates = [
+		// biome-ignore lint/complexity/useOptionalChain: no `?.` (webpack 1)
+		(journey.MonitoredCall || {}).DestinationDisplay,
+		journey.DestinationName,
+		journey.DirectionName,
+	];
+	for (const list of candidates) {
+		const first = (list || [])[0] || {};
+		if (first.value) return first.value;
+	}
+	return "";
+}
+
+/**
+ * @param {object[]} visits - MonitoredStopVisit list (already filtered for
+ *   an A->B trip).
+ * @param {number} now - Epoch ms.
+ * @returns {{journey: object, atStop: boolean, cancelled: boolean,
+ *   minutes: number, timeMs: ?number}[]} The departures with a usable
+ *   time, running trains first (a cancelled one can't hide the real next
+ *   departure), then at-stop first, then by time. `minutes` is floored at 0:
+ *   the expected time can be slightly past before VehicleAtStop flips.
+ */
+function rankDepartures(visits, now) {
+	return visits
+		.map((visit) => visit && visit.MonitoredVehicleJourney)
+		.filter((journey) => journey && journey.MonitoredCall)
+		.map((journey) => {
+			const call = journey.MonitoredCall;
+			const atStop = call.VehicleAtStop === true;
+			const timeMs = callTimeMs(call);
+			const minutes =
+				timeMs === null ? null : Math.round((timeMs - now) / MINUTE_MS);
+			return {
+				journey: journey,
+				atStop: atStop,
+				cancelled: call.DepartureStatus === "cancelled",
+				minutes: minutes === null ? null : Math.max(0, minutes),
+				timeMs: timeMs,
+				rank: atStop ? -1 : minutes,
+			};
+		})
+		.filter((d) => d.atStop || d.minutes !== null)
+		.sort(
+			(a, b) => Number(a.cancelled) - Number(b.cancelled) || a.rank - b.rank
+		);
+}
+
 const DEFAULT_CALL_GUARD = {
 	maxCalls: 40,
 	windowMinutes: 10,
@@ -233,6 +288,8 @@ function staleExtra(saved, now) {
 
 module.exports = {
 	callTimeMs: callTimeMs,
+	journeyDestinationName: journeyDestinationName,
+	rankDepartures: rankDepartures,
 	staleExtra: staleExtra,
 	filterVisitsServingStop: filterVisitsServingStop,
 	journeyMission: journeyMission,

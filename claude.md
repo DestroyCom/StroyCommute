@@ -113,6 +113,15 @@ files under `/mnt/d`.
   runs, i.e. while the app is open. To do work at a given time with the app
   closed, schedule a watch wakeup (`pebble/wakeup`), which relaunches the
   app.
+  The one exception is the app's plugin (`src/plugin/`, Pebble app plugins
+  preview): it runs while a watchface or Index reads its
+  `transit/departure` source, possibly all day. It has its own quota
+  budget, which must stay at least this strict: shared call guard and
+  daily count, one fetch per trip per 2 minutes, 3 trips at most, no fetch
+  under 300 calls left for the day, off when `pluginEnabled` is false.
+  `src/plugin/plugin.js` is generated (`npm run sync:plugin`, checked in
+  CI by `check:config`) from `src/plugin/main.js` and `src/pkjs/trips.js`:
+  never edit it by hand.
 - All date/time conversion (UTC → minutes remaining) happens in pkjs,
   since that's where the raw SIRI response now arrives (also matches
   `docs/idfm-api-reference.md`'s original note that this conversion
