@@ -69,7 +69,10 @@
 			"diagText",
 			"departTime",
 			"departTime2",
-			"vibrateMinutes"
+			"vibrateMinutes",
+			"alertCount",
+			"alertText",
+			"autoOpen"
 		],
 		"resources": {
 			"media": [
@@ -101,6 +104,16 @@
 				},
 				"reason": "Pour chercher les arrêts et les lignes dans les réglages",
 				"required": true
+			},
+			{
+				"name": "ShowNotifications",
+				"reason": "Pour te prévenir d'une nouvelle perturbation sur tes lignes, pendant ton créneau",
+				"required": false
+			},
+			{
+				"name": "Timeline",
+				"reason": "Pour ajouter les perturbations de tes lignes et leur fin à la timeline, si tu l'actives",
+				"required": false
 			}
 		],
 		"plugin": {

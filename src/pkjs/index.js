@@ -64,6 +64,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
   .moveBtn { background: #444; padding: 8px 14px; font-size: 15px; line-height: 1; }
   .moveBtn:disabled { opacity: 0.3; }
   #diagText { width: 100%; margin-top: 8px; padding: 8px; font-family: monospace; font-size: 12px; background: #111; color: #ddd; border: 1px solid #444; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .optionRow { display: block; margin-top: 10px; }
   .diagButtons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 </style>
 </head>
@@ -103,14 +104,15 @@ const CONFIG_HTML = `<!DOCTYPE html>
     <div id="directionPicker"></div>
   </fieldset>
 
-  <!-- Traffic alerts aren't implemented yet (fetchLineAlerts() is a stub on
-       the watch) -- hidden until they are, see ALERTS_ENABLED below. -->
+  <!-- Traffic alerts (PRIM general-message, fetched by pkjs). Hidden when
+       ALERTS_ENABLED below is false. -->
   <div id="alertsSection" hidden>
     <fieldset>
       <legend data-i18n="linesLegend">Lignes suivies (alertes trafic)</legend>
       <div id="linesList"></div>
       <input type="text" id="lineSearchInput" data-i18n-placeholder="lineSearchPlaceholder" placeholder="Rechercher une ligne (ex : 4, RER A)" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceSearch('line')" disabled>
       <div id="lineSearchResults" class="searchResults"></div>
+      <div class="searchStatus" data-i18n="linesHint">Les lignes de tes arrêts suivis sont surveillées automatiquement. Ajoute ici d'autres lignes à surveiller.</div>
     </fieldset>
 
     <fieldset>
@@ -128,6 +130,9 @@ const CONFIG_HTML = `<!DOCTYPE html>
         <label><span data-i18n="scheduleStart">Début</span> <input type="time" id="scheduleStart" value="07:00"></label>
         <label><span data-i18n="scheduleEnd">Fin</span> <input type="time" id="scheduleEnd" value="19:30"></label>
       </div>
+      <label class="optionRow"><input type="checkbox" id="notifyAlerts" checked> <span data-i18n="notifyLabel">Me notifier sur la montre d'une nouvelle perturbation pendant ce créneau</span></label>
+      <label class="optionRow"><input type="checkbox" id="autoOpen"> <span data-i18n="autoOpenLabel">Ouvrir l'app au début du créneau</span></label>
+      <div class="searchStatus" data-i18n="alertsHint">Les alertes sont vérifiées quand l'app est ouverte, toutes les 10 minutes. L'ouverture automatique permet de les vérifier (et d'avoir tes horaires) dès le début du créneau.</div>
     </fieldset>
 
     <fieldset>
@@ -189,7 +194,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
   var MAX_ITEMS = 8;
   // Traffic alerts (followed lines, schedule, timeline) aren't implemented
   // on the watch yet: their section stays hidden and no line is saved.
-  var ALERTS_ENABLED = false;
+  var ALERTS_ENABLED = true;
 
   // UI strings. Keep the language list in sync with SUPPORTED_LANGUAGES in
   // src/pkjs/index.js and STRINGS in src/embeddedjs/main.js. "{name}"
@@ -219,12 +224,16 @@ const CONFIG_HTML = `<!DOCTYPE html>
       moveUp: "Monter",
       moveDown: "Descendre",
       linesLegend: "Lignes suivies (alertes trafic)",
+      linesHint: "Les lignes de tes arrêts suivis sont surveillées automatiquement. Ajoute ici d'autres lignes à surveiller.",
+      notifyLabel: "Me notifier sur la montre d'une nouvelle perturbation pendant ce créneau",
+      autoOpenLabel: "Ouvrir l'app au début du créneau",
+      alertsHint: "Les alertes sont vérifiées quand l'app est ouverte, toutes les 10 minutes. L'ouverture automatique permet de les vérifier (et d'avoir tes horaires) dès le début du créneau.",
       lineSearchPlaceholder: "Rechercher une ligne (ex : 4, RER A)",
-      scheduleLegend: "Période de réception des alertes",
+      scheduleLegend: "Créneau de trajet (alertes)",
       dayMon: "Lun", dayTue: "Mar", dayWed: "Mer", dayThu: "Jeu", dayFri: "Ven", daySat: "Sam", daySun: "Dim",
       scheduleStart: "Début",
       scheduleEnd: "Fin",
-      timelineLabel: "Ajouter les infos IDFM (ex : fin d'incident) à la timeline",
+      timelineLabel: "Ajouter les perturbations de mes lignes, et leur fin, à la timeline",
       save: "Enregistrer",
       keyChecking: "Vérification...",
       keyValid: "Clé valide ✓",
@@ -298,12 +307,16 @@ const CONFIG_HTML = `<!DOCTYPE html>
       moveUp: "Move up",
       moveDown: "Move down",
       linesLegend: "Followed lines (traffic alerts)",
+      linesHint: "The lines of your tracked stops are watched automatically. Add other lines to watch here.",
+      notifyLabel: "Notify me on the watch of a new disruption during this window",
+      autoOpenLabel: "Open the app when the window starts",
+      alertsHint: "Alerts are checked while the app is open, every 10 minutes. Opening it automatically checks them (and shows your times) as the window starts.",
       lineSearchPlaceholder: "Search a line (e.g. 4, RER A)",
-      scheduleLegend: "Alert schedule",
+      scheduleLegend: "Commute window (alerts)",
       dayMon: "Mon", dayTue: "Tue", dayWed: "Wed", dayThu: "Thu", dayFri: "Fri", daySat: "Sat", daySun: "Sun",
       scheduleStart: "Start",
       scheduleEnd: "End",
-      timelineLabel: "Add IDFM notices (e.g. end of disruption) to the timeline",
+      timelineLabel: "Add my lines' disruptions, and their end, to the timeline",
       save: "Save",
       keyChecking: "Checking...",
       keyValid: "Valid key ✓",
@@ -1401,6 +1414,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
       callGuard: callGuard,
       vibrateMinutes: parseInt(document.getElementById("vibrateMinutes").value, 10) || 0,
       pluginEnabled: document.getElementById("pluginEnabled").checked,
+      notifyAlerts: document.getElementById("notifyAlerts").checked,
+      autoOpen: document.getElementById("autoOpen").checked,
       language: document.getElementById("language").value
     };
     var json = JSON.stringify(config);
@@ -1440,6 +1455,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
     document.getElementById("timelineEnabled").checked = !!initial.timelineEnabled;
     document.getElementById("vibrateMinutes").value = String(initial.vibrateMinutes || 0);
     document.getElementById("pluginEnabled").checked = initial.pluginEnabled !== false;
+    document.getElementById("notifyAlerts").checked = initial.notifyAlerts !== false;
+    document.getElementById("autoOpen").checked = !!initial.autoOpen;
     var guard = initial.callGuard || {};
     if (typeof guard.maxCalls === "number") document.getElementById("guardMaxCalls").value = guard.maxCalls;
     if (typeof guard.windowMinutes === "number") document.getElementById("guardWindow").value = guard.windowMinutes;
@@ -1538,6 +1555,7 @@ const {
 	rankDepartures,
 } = require("./trips");
 const { watchLineColors } = require("./colors");
+const alerts = require("./alerts");
 const { parseWatchDiag, mergeDiagEntries } = require("./diag");
 
 // --- Error journal (config page > Diagnostic) ---
@@ -1699,6 +1717,8 @@ function handleAppMessage(payload) {
 		handleRefreshStop(payload);
 	} else if (payload.itemType === "diagReport") {
 		storeDiag(parseWatchDiag(payload.diagText, watchDescription()));
+	} else if (payload.itemType === "refreshAlerts") {
+		refreshAlerts();
 	} else if (payload.itemType === "configResendRequest") {
 		// Task 8b reconciliation: the watch didn't see a complete config
 		// within its timeout and is asking for a fresh full resend. Reuse
@@ -1765,7 +1785,7 @@ function daysToBitmask(days) {
 }
 
 // Mirrors ALERTS_ENABLED in CONFIG_HTML -- flip both together.
-const ALERTS_ENABLED = false;
+const ALERTS_ENABLED = true;
 
 /**
  * Sends the full config (schedule + tracked stops/lines) to the watch as a
@@ -1775,9 +1795,8 @@ const ALERTS_ENABLED = false;
  */
 function sendConfigToWatch(rawConfig) {
 	const config = normalizeConfig(rawConfig);
-	// Traffic alerts aren't implemented yet (see ALERTS_ENABLED in
-	// CONFIG_HTML): lines saved by an older version would only show
-	// "coming soon" screens on the watch.
+	// Lines added in the alerts section (the watch always shows them); the
+	// tracked stops' lines are watched too, see alertLines in alerts.js.
 	const trackedLines = ALERTS_ENABLED ? config.trackedLines : [];
 	const itemCount = 1 + config.trackedStops.length + trackedLines.length;
 
@@ -1793,6 +1812,8 @@ function sendConfigToWatch(rawConfig) {
 			language: resolveLanguage(config.language),
 			// Vibrate when the next departure gets this close (0 = off).
 			vibrateMinutes: config.vibrateMinutes,
+			// Open the app when the schedule starts (watch wakeup).
+			autoOpen: config.autoOpen ? 1 : 0,
 		},
 	];
 
@@ -1974,6 +1995,8 @@ function normalizeConfig(config) {
 			0,
 			Math.min(30, Math.floor(Number(config.vibrateMinutes)) || 0)
 		),
+		notifyAlerts: config.notifyAlerts !== false,
+		autoOpen: !!config.autoOpen,
 		alertSchedule: {
 			days: Array.isArray(schedule.days) ? schedule.days : [],
 			startTime: schedule.startTime || "07:00",
@@ -1998,6 +2021,21 @@ function checkCallGuard(config, count) {
 	);
 	localStorage.setItem("stroycommuteCallGuard", JSON.stringify(decision.state));
 	return decision;
+}
+
+/**
+ * @param {XMLHttpRequest} xhr - A finished PRIM request.
+ * @returns {?number} The endpoint's calls left today, from PRIM's
+ *   X-Ratelimit-Remaining-Day header, null when absent.
+ */
+function remainingQuota(xhr) {
+	try {
+		const value = xhr.getResponseHeader("X-Ratelimit-Remaining-Day");
+		const n = value === null || value === "" ? Number.NaN : Number(value);
+		return Number.isFinite(n) ? n : null;
+	} catch (_error) {
+		return null;
+	}
 }
 
 // A PRIM request without an answer after this long counts as a network error.
@@ -2105,6 +2143,10 @@ function fetchStopVisits(apiKey, stopRef, lineRef, done) {
 	xhr.open("GET", url, true);
 	xhr.setRequestHeader("apiKey", apiKey);
 	xhr.onload = guarded("stop-monitoring.onload", () => {
+		// PRIM's own count, when the response carries it (it does), over the
+		// local estimate.
+		const remaining = remainingQuota(xhr);
+		if (remaining !== null) lastQuotaRemaining = remaining;
 		if (xhr.status === 429) return finish("quotaExceeded");
 		if (xhr.status === 401 || xhr.status === 403) return finish("invalidKey");
 		if (xhr.status === 400 || xhr.status === 404) {
@@ -2396,5 +2438,184 @@ function sendWithRetry(payload, retriesLeft) {
 				DEPARTURE_RETRY_DELAY_MS
 			);
 		}
+	);
+}
+
+// --- Traffic alerts (PRIM general-message) ---
+// The watch asks (refreshAlerts) when the config loads and every 10 min
+// while the app is open; nothing runs with the app closed (see the
+// optional wakeup at the schedule's start, watch side). Each watched line
+// costs one general-message call per ALERT_CACHE_MS at most, on a quota
+// separate from stop-monitoring's.
+
+const GENERAL_MESSAGE_URL =
+	"https://prim.iledefrance-mobilites.fr/marketplace/general-message";
+const ALERTS_KEY = "stroycommuteAlerts"; // lineRef -> { at, messages }
+const ALERTS_SEEN_KEY = "stroycommuteAlertSeen"; // message id -> first seen
+const ALERT_CACHE_MS = 10 * 60000;
+// Notifications per check, at most (several new messages at once usually
+// mean a network-wide event, and the watch screens list them all anyway).
+const MAX_NOTIFICATIONS = 3;
+// What the watch gets per line: the messages' texts, this long at most.
+const MAX_ALERT_TEXT = 360;
+const ALERT_TEXTS = {
+	fr: { trafficInfo: "Info trafic", trafficEnded: "Fin de perturbation" },
+	en: { trafficInfo: "Traffic info", trafficEnded: "Disruption over" },
+};
+
+/**
+ * Fetches one line's messages; `done(messages)` gets null on any failure.
+ * @param {string} apiKey
+ * @param {string} lineRef
+ * @param {function(?object[]): void} done
+ */
+function fetchGeneralMessages(apiKey, lineRef, done) {
+	const xhr = new XMLHttpRequest();
+	let finished = false;
+	const finish = (messages) => {
+		if (finished) return;
+		finished = true;
+		clearTimeout(timer);
+		done(messages);
+	};
+	const timer = setTimeout(
+		guarded("general-message.timeout", () => {
+			try {
+				xhr.abort();
+			} catch (_error) {
+				// already over
+			}
+			finish(null);
+		}),
+		PRIM_TIMEOUT_MS
+	);
+	xhr.open(
+		"GET",
+		`${GENERAL_MESSAGE_URL}?LineRef=${encodeURIComponent(lineRef)}`,
+		true
+	);
+	xhr.setRequestHeader("apiKey", apiKey);
+	xhr.onload = guarded("general-message.onload", () => {
+		if (xhr.status < 200 || xhr.status >= 300) {
+			console.log(`general-message ${xhr.status} for ${lineRef}`);
+			return finish(null);
+		}
+		finish(alerts.parseGeneralMessages(JSON.parse(xhr.responseText), lineRef));
+	});
+	xhr.onerror = guarded("general-message.onerror", () => finish(null));
+	xhr.send();
+}
+
+/**
+ * Brings every watched line's messages up to date (cached ones younger
+ * than ALERT_CACHE_MS are reused), then notifies, pins and tells the watch.
+ */
+function refreshAlerts() {
+	const stored = storedConfig();
+	if (!stored || !stored.apiKey) return;
+	const config = normalizeConfig(stored);
+	const lines = alerts.alertLines(config);
+	if (lines.length === 0) return;
+	const cache = readJson(ALERTS_KEY, {});
+	const previous = {}; // message id -> { text, lineName }, before this check
+	for (const line of lines) {
+		const entry = cache[line.lineRef];
+		for (const message of (entry && entry.messages) || []) {
+			previous[message.id] = { text: message.text, lineName: line.lineName };
+		}
+	}
+	let pending = lines.length;
+	const lineDone = () => {
+		pending -= 1;
+		if (pending === 0) afterAlertRefresh(config, lines, cache, previous);
+	};
+	const now = Date.now();
+	for (const line of lines) {
+		const entry = cache[line.lineRef];
+		if (entry && now - entry.at < ALERT_CACHE_MS) {
+			lineDone();
+			continue;
+		}
+		fetchGeneralMessages(config.apiKey, line.lineRef, (messages) => {
+			if (messages)
+				cache[line.lineRef] = { at: Date.now(), messages: messages };
+			lineDone();
+		});
+	}
+}
+
+/** Second half of refreshAlerts, once every line answered. */
+function afterAlertRefresh(config, lines, cache, previous) {
+	const now = Date.now();
+	const kept = {};
+	const current = [];
+	const lineOf = {};
+	for (const line of lines) {
+		const entry = cache[line.lineRef];
+		if (!entry) continue;
+		kept[line.lineRef] = entry;
+		for (const message of entry.messages) {
+			current.push(message);
+			if (!lineOf[message.id]) lineOf[message.id] = line;
+		}
+	}
+	localStorage.setItem(ALERTS_KEY, JSON.stringify(kept));
+
+	const seen = readJson(ALERTS_SEEN_KEY, null);
+	const diff = alerts.diffMessages(seen || {}, current, now, seen === null);
+	localStorage.setItem(ALERTS_SEEN_KEY, JSON.stringify(diff.seen));
+	const texts = ALERT_TEXTS[resolveLanguage(config.language)] || ALERT_TEXTS.fr;
+	const byId = {};
+	for (const message of current) byId[message.id] = message;
+
+	if (
+		config.notifyAlerts &&
+		alerts.inSchedule(config.alertSchedule, new Date(now))
+	) {
+		for (const id of diff.added.slice(0, MAX_NOTIFICATIONS)) {
+			Pebble.showSimpleNotificationOnPebble(
+				`${lineOf[id].lineName} : ${texts.trafficInfo}`,
+				byId[id].text
+			);
+		}
+	}
+	if (config.timelineEnabled) {
+		const toPin = seen === null ? current.map((m) => m.id) : diff.added;
+		for (const id of toPin) {
+			Pebble.insertTimelinePin(
+				alerts.alertPin(byId[id], lineOf[id].lineName, diff.seen[id], texts)
+			);
+		}
+		for (const id of diff.ended) {
+			Pebble.deleteTimelinePin(alerts.pinId(id));
+			const last = previous[id];
+			if (last) {
+				Pebble.insertTimelinePin(
+					alerts.endPin(id, last.lineName, last.text, now, texts)
+				);
+			}
+		}
+	}
+
+	// One alertUpdate per line, its messages' texts joined.
+	sendItemsSequentially(
+		lines.map((line) => {
+			const entry = kept[line.lineRef];
+			const messages = entry ? entry.messages : [];
+			const item = {
+				itemType: "alertUpdate",
+				lineRef: line.lineRef,
+				lineName: line.lineName,
+				alertCount: messages.length,
+			};
+			if (messages.length) {
+				item.alertText = messages
+					.map((m) => m.text)
+					.join("\n")
+					.slice(0, MAX_ALERT_TEXT);
+			}
+			return item;
+		}),
+		0
 	);
 }

@@ -113,9 +113,17 @@ AppMessage now carries traffic in both directions:
   quota (not a true server-side count -- PRIM exposes no such endpoint),
   attached to every reply regardless of `state` and shown on the watch's
   settings screen.
-- **watch→phone (`alertForTimeline`)**: used once traffic alerts are
-  implemented for real (currently dormant, `fetchLineAlerts()` is a stub
-  in embeddedjs).
+- **Traffic alerts** (PRIM `general-message`, see
+  `docs/idfm-api-reference.md`): the watch sends `refreshAlerts` when the
+  config loads and every 10 min; pkjs checks the watched lines (the
+  `configLine` ones plus the tracked stops' lines, `alertLines` in
+  `src/pkjs/alerts.js`), at most once per line per 10 min, and answers with
+  one `{itemType: "alertUpdate", lineRef, lineName, alertCount,
+  alertText?}` per line. pkjs also notifies new messages during the
+  schedule (`notifyAlerts`), pins them and their end to the timeline
+  (`timelineEnabled`); nothing on the very first check. `autoOpen` makes the
+  watch schedule a wakeup at the schedule's start. The old
+  `alertForTimeline` design is not used.
 
 A watch-side settings screen (always the last item in the up/down cycle,
 appended by `buildItemList()` once config has loaded) shows the tracked

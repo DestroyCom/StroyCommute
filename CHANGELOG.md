@@ -11,6 +11,9 @@ version texte à coller dans le store.
 
 ### Nouveautés
 
+- Alertes trafic : les perturbations des lignes de tes arrêts (et des lignes que tu ajoutes) s'affichent sur la montre, avec un écran par ligne perturbée et un rappel sur l'écran de l'arrêt.
+- Notification sur la montre quand une nouvelle perturbation apparaît pendant ton créneau de trajet (réglable), et ajout des perturbations et de leur fin à la timeline (option).
+- Option pour ouvrir l'app automatiquement au début de ton créneau de trajet.
 - Tes prochains départs peuvent s'afficher sur les cadrans compatibles avec les plugins Pebble (aperçu à activer dans l'app Pebble), avec une consommation de quota limitée. Réglage « Cadrans » pour le désactiver.
 - Compatible avec la Pebble Round 2 : mise en page adaptée à l'écran rond.
 - Vibration à l'approche du train, au choix de 1 à 10 minutes avant le départ (réglage « Vibration », désactivé par défaut).
@@ -26,6 +29,7 @@ version texte à coller dans le store.
 - Les minutes avant le départ se mettent à jour toutes seules chaque minute, et le train suivant prend le relais quand le premier est parti.
 - Quand le prochain départ est à plus de 10 minutes, les horaires sont rafraîchis toutes les 3 minutes au lieu de chaque minute : moins de batterie et de quota consommés.
 - Couleurs des lignes ajustées à l'écran de la montre, avec un texte toujours lisible sur le bandeau.
+- Le quota PRIM affiché sur la montre est désormais celui annoncé par PRIM, et non plus une estimation.
 - Les trajets avec arrêt d'arrivée tiennent dans le bandeau grâce à un texte plus petit quand il est long.
 
 ### Corrections

@@ -20,6 +20,9 @@ function loadPhone(options = {}) {
 	const sent = [];
 	const attempts = [];
 	const requests = [];
+	const notifications = [];
+	const pins = new Map();
+	const deletedPins = [];
 	let opened = null;
 
 	const realNow = Date.now;
@@ -54,6 +57,12 @@ function loadPhone(options = {}) {
 				sent.push(payload);
 				if (ack) ack();
 			},
+			showSimpleNotificationOnPebble: (title, body) => notifications.push({ title, body }),
+			insertTimelinePin: (pin) => pins.set(pin.id, pin),
+			deleteTimelinePin: (id) => {
+				deletedPins.push(id);
+				pins.delete(id);
+			},
 			openURL: (url) => {
 				opened = url;
 			},
@@ -81,9 +90,15 @@ function loadPhone(options = {}) {
 			abort() {
 				this.aborted = true;
 			}
+			getResponseHeader(name) {
+				const headers = this.responseHeaders || {};
+				const key = Object.keys(headers).find((k) => k.toLowerCase() === name.toLowerCase());
+				return key === undefined ? null : String(headers[key]);
+			}
 			/** Test side: answer this request. */
-			respond(status, body) {
+			respond(status, body, headers) {
 				this.status = status;
+				this.responseHeaders = headers || {};
 				this.responseText = typeof body === "string" ? body : JSON.stringify(body);
 				this.onload();
 			}
@@ -109,6 +124,9 @@ function loadPhone(options = {}) {
 		sent,
 		attempts,
 		requests,
+		notifications,
+		pins,
+		deletedPins,
 		get opened() {
 			return opened;
 		},
@@ -143,6 +161,10 @@ function loadPhone(options = {}) {
 				}
 			}
 			now = end;
+		},
+		/** Sets the fake clock (epoch ms). */
+		setNow(ms) {
+			now = ms;
 		},
 		get now() {
 			return now;

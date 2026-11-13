@@ -1,5 +1,6 @@
 import Message from "pebble/message";
 import Vibes from "pebble/vibes";
+import WakeUp from "pebble/wakeup";
 
 // --- UI strings (fr/en) ---
 // The language is resolved phone-side (config page choice, or the watch's
@@ -27,7 +28,8 @@ const STRINGS = {
 		settings: "Settings",
 		quotaRemaining: "PRIM quota: {n} left",
 		quotaUnknown: "PRIM quota: unknown",
-		alertsSoon: "Traffic alerts coming soon",
+		noAlert: "No disruption",
+		trafficInfoCount: "Traffic info: {n}",
 		phoneDisconnected: "Phone disconnected",
 	},
 	fr: {
@@ -50,7 +52,8 @@ const STRINGS = {
 		settings: "Réglages",
 		quotaRemaining: "Quota PRIM : {n} restant(s)",
 		quotaUnknown: "Quota PRIM : inconnu",
-		alertsSoon: "Alertes trafic bientôt disponibles",
+		noAlert: "Pas de perturbation",
+		trafficInfoCount: "Info trafic : {n}",
 		phoneDisconnected: "Téléphone déconnecté",
 	},
 };
@@ -292,6 +295,9 @@ const ALL_MESSAGE_KEYS = [
 	"departTime",
 	"departTime2",
 	"vibrateMinutes",
+	"alertCount",
+	"alertText",
+	"autoOpen",
 ];
 const MESSAGE_KEY_CODES = new Map(
 	ALL_MESSAGE_KEYS.map((key, index) => [key, 10000 + index])
@@ -305,6 +311,11 @@ const MESSAGE_KEY_CODES = new Map(
 // Moddable SDK). Everything outgoing goes through flushOutbox().
 const message = new Message({
 	keys: MESSAGE_KEY_CODES,
+	// AppMessage buffers, taken from the app's RAM (the default is the
+	// 8,200-byte maximum each way). The largest message in is an alertUpdate
+	// (under 1 KB), the largest out the error journal (DIAG_MAX_TEXT chars).
+	input: 2048,
+	output: 2560,
 	onReadable: safe("message.onReadable", function () {
 		const msg = this.read();
 		if (!msg) return; // nothing queued
@@ -317,6 +328,8 @@ const message = new Message({
 		);
 		if (item.itemType === "departureUpdate") {
 			handleDepartureUpdate(item);
+		} else if (item.itemType === "alertUpdate") {
+			handleAlertUpdate(item);
 		} else if (CONFIG_ITEM_TYPES.includes(item.itemType)) {
 			handleConfigItem(item);
 		}
@@ -333,6 +346,7 @@ const message = new Message({
 // Writers of the single outbound slot, in priority order: the error
 // journal, a config resend request, then refreshStop requests.
 let configRequestPending = false;
+let alertRequestPending = false;
 const refreshQueue = [];
 
 /**
@@ -417,6 +431,11 @@ function flushOutbox() {
 		if (result === "busy") return;
 		configRequestPending = false;
 	}
+	if (alertRequestPending) {
+		if (writeMessage(new Map([["itemType", "refreshAlerts"]])) === "busy")
+			return;
+		alertRequestPending = false;
+	}
 	while (refreshQueue.length > 0) {
 		if (writeMessage(refreshStopMessage(refreshQueue[0])) === "busy") return;
 		refreshQueue.shift(); // sent, or failed and recorded
@@ -482,6 +501,7 @@ function handleConfigItem(item) {
 			timeline: !!item.timelineEnabled,
 		};
 		if (STRINGS[item.language]) language = item.language;
+		autoOpen = !!item.autoOpen;
 		vibrateMinutes =
 			typeof item.vibrateMinutes === "number" ? item.vibrateMinutes : 0;
 		pendingConfigCount = item.itemCount;
@@ -527,6 +547,9 @@ function onConfigReady() {
 	startRefreshTimer();
 	render();
 	requestRefresh();
+	requestAlerts();
+	startAlertTimer();
+	run("scheduleCommuteWakeup", scheduleCommuteWakeup);
 	if (sessionStage === "boot") {
 		markSession("ready");
 		setTimeout(
@@ -536,6 +559,108 @@ function onConfigReady() {
 			SESSION_OK_DELAY_MS
 		);
 	}
+}
+
+// --- Traffic alerts ---
+// pkjs fetches PRIM general-message for the watched lines (the tracked
+// stops' lines plus those added in the alerts section) and answers a
+// refreshAlerts request with one alertUpdate per line. Asked when the
+// config loads and every ALERT_REFRESH_MS while the app is open.
+
+const ALERT_REFRESH_MS = 10 * 60000;
+// lineRef -> { lineName, count, text } from the latest alertUpdate.
+const lineAlerts = new Map();
+let alertTimer = null;
+// Open the app when the schedule starts (config page option).
+let autoOpen = false;
+const WAKEUP_ID_KEY = "commuteWakeupId";
+
+/** Asks pkjs for the watched lines' traffic info. */
+function requestAlerts() {
+	if (stops.length === 0 && alertLines.length === 0) return;
+	alertRequestPending = true;
+	flushOutbox();
+}
+
+/** Starts the alerts refresh timer, once. */
+function startAlertTimer() {
+	if (alertTimer !== null) return;
+	alertTimer = setInterval(safe("alertTick", requestAlerts), ALERT_REFRESH_MS);
+}
+
+/** @param {object} item - A decoded alertUpdate. */
+function handleAlertUpdate(item) {
+	lineAlerts.set(item.lineRef, {
+		lineName: item.lineName,
+		count: item.alertCount || 0,
+		text: item.alertText || "",
+	});
+	rebuildItems();
+	render();
+}
+
+/** Rebuilds the item list, staying on the item that was on screen. */
+function rebuildItems() {
+	const current = items[selectedIndex];
+	const key = current ? itemKey(current) : "";
+	items = buildItemList();
+	const index = items.findIndex((item) => itemKey(item) === key);
+	selectedIndex =
+		index === -1
+			? Math.min(selectedIndex, Math.max(0, items.length - 1))
+			: index;
+}
+
+/** @returns {string} A stable key for an item of the list. */
+function itemKey(item) {
+	if (item.type === "stop") return `stop|${departureKey(item)}`;
+	if (item.type === "alert") return `alert|${item.lineRef}`;
+	return item.type;
+}
+
+/**
+ * @param {number} now - Epoch ms.
+ * @returns {?number} When the schedule next starts (local time), at least a
+ *   minute from now; null without days or start time.
+ */
+function nextScheduleStart(now) {
+	if (!schedule.days) return null;
+	for (let d = 0; d <= 7; d++) {
+		const date = new Date(now);
+		date.setDate(date.getDate() + d);
+		date.setHours(
+			Math.floor(schedule.startMinutes / 60),
+			schedule.startMinutes % 60,
+			0,
+			0
+		);
+		if (date.getTime() > now + 60000 && schedule.days & (1 << date.getDay())) {
+			return date.getTime();
+		}
+	}
+	return null;
+}
+
+/**
+ * Keeps one wakeup at the next schedule start when autoOpen is on (the app
+ * then opens by itself, with departures and alerts up to date), none
+ * otherwise. Re-done at every config load, so it rolls forward daily.
+ */
+function scheduleCommuteWakeup() {
+	const stored = storageGet(WAKEUP_ID_KEY);
+	if (stored !== null) {
+		try {
+			WakeUp.cancel(Number(stored));
+		} catch (error) {
+			console.log(`wakeup cancel: ${error}`);
+		}
+		storageRemove(WAKEUP_ID_KEY);
+	}
+	if (!autoOpen) return;
+	const at = nextScheduleStart(Date.now());
+	if (at === null) return;
+	const id = WakeUp.schedule(at, 1, false);
+	if (typeof id === "number" && id >= 0) storageSet(WAKEUP_ID_KEY, String(id));
 }
 
 // --- Departures ---
@@ -853,12 +978,21 @@ function startRefreshTimer() {
 function buildItemList() {
 	const list = [];
 	for (const stop of stops) list.push(Object.assign({ type: "stop" }, stop));
+	// Lines added in the alerts section always have a screen; the tracked
+	// stops' lines only while they have messages.
+	const shownLines = new Set();
 	for (const line of alertLines) {
+		shownLines.add(line.lineRef);
 		list.push({
 			type: "alert",
 			lineRef: line.lineRef,
 			lineName: line.lineName,
 		});
+	}
+	for (const [lineRef, info] of lineAlerts) {
+		if (info.count > 0 && !shownLines.has(lineRef)) {
+			list.push({ type: "alert", lineRef: lineRef, lineName: info.lineName });
+		}
 	}
 	// Settings last, once loaded, and only next to something to show:
 	// with nothing configured the screen says so instead.
@@ -895,6 +1029,7 @@ function describeScreen() {
 		next: "",
 		alert: "",
 		footer: "",
+		body: "",
 	};
 	const item = items[selectedIndex];
 	if (!item) {
@@ -921,8 +1056,12 @@ function describeScreen() {
 		);
 	} else if (offline) {
 		model.alert = t("phoneDisconnected");
-	} else if (items.length > 1) {
-		model.footer = t("cycleHint");
+	} else {
+		if (items.length > 1) model.footer = t("cycleHint");
+		const info = item.type === "stop" ? lineAlerts.get(item.lineRef) : null;
+		if (info && info.count > 0) {
+			model.alert = t("trafficInfoCount", info.count);
+		}
 	}
 
 	if (item.type === "settings") {
@@ -934,8 +1073,13 @@ function describeScreen() {
 		return model;
 	}
 	if (item.type === "alert") {
+		const info = lineAlerts.get(item.lineRef);
 		model.title = item.lineName;
-		model.line = t("alertsSoon");
+		if (info && info.count > 0) {
+			model.body = info.text;
+			model.footer = ""; // the text uses the whole screen
+		} else if (info) model.line = t("noAlert");
+		else model.line = "...";
 		return model;
 	}
 
@@ -984,6 +1128,8 @@ const rowStyle = new Style({ font: "18px Gothic", color: "black" });
 const titleStyle = new Style({ font: "bold 24px Gothic", color: "black" });
 const bodyStyle = new Style({ font: "18px Gothic", color: "black" });
 const errorStyle = new Style({ font: "18px Gothic", color: "#AA0000" });
+// Traffic info texts: long, so smaller.
+const smallStyle = new Style({ font: "14px Gothic", color: "black" });
 
 // One Skin per line color and one Style per banner text color, created on
 // first use and kept.
@@ -1090,6 +1236,7 @@ const LAYOUT = ROUND
 			next: [170, 30],
 			alert: [198, 46],
 			footer: [222, 70],
+			body: [72, 28, 150],
 		}
 	: {
 			banner: { top: 0, height: 44, inset: 8 },
@@ -1099,6 +1246,7 @@ const LAYOUT = ROUND
 			next: [150, 8],
 			alert: [178, 8],
 			footer: [200, 8],
+			body: [42, 6, 184],
 		};
 
 /** @returns {Label} A hidden single-line label at LAYOUT[name]. */
@@ -1147,6 +1295,17 @@ function createView() {
 	view.next = label("next", bodyStyle);
 	view.alert = label("alert", errorStyle);
 	view.footer = label("footer", rowStyle);
+	// A line's traffic info: several lines of text under its name.
+	const [bodyTop, bodyInset, bodyHeight] = LAYOUT.body;
+	view.body = new Text(null, {
+		top: bodyTop,
+		left: bodyInset,
+		right: bodyInset,
+		height: bodyHeight,
+		style: smallStyle,
+		string: "",
+	});
+	view.body.visible = false;
 	const root = new Container(null, {
 		left: 0,
 		right: 0,
@@ -1162,6 +1321,7 @@ function createView() {
 			view.next,
 			view.alert,
 			view.footer,
+			view.body,
 		],
 	});
 	application.add(root);
@@ -1219,6 +1379,7 @@ function applyScreen(model) {
 	show("next", model.next);
 	show("alert", model.alert);
 	show("footer", model.footer);
+	show("body", model.body);
 }
 
 /** Brings the screen up to date. Cheap: only changed contents are touched. */

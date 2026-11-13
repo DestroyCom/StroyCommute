@@ -51,7 +51,8 @@ test("a loaded config shows the stop and asks for its departures", async () => {
 	const watch = await started();
 	assert.deepStrictEqual(watch.screen(), ["4 — Bagneux", "...", "Haut / Bas pour changer"]);
 	assert.strictEqual(watch.bannerColor(), "#BE418D");
-	assert.deepStrictEqual(watch.sent.at(-1), {
+	assert.ok(watch.sent.some((m) => m.itemType === "refreshAlerts"));
+	assert.deepStrictEqual(watch.sent.filter((m) => m.itemType === "refreshStop").at(-1), {
 		itemType: "refreshStop",
 		stopRef: STOP.stopRef,
 		lineRef: STOP.lineRef,
@@ -256,5 +257,68 @@ test("a long A->B banner uses the smaller font", async () => {
 	const watch = await started([{ ...STOP, destStopRef: "STIF:StopArea:SP:1:", destStopName: "Bourg-la-Reine Centre" }]);
 	const banner = watch.root.contents[0].contents[0];
 	assert.match(banner.contents[0].style.font, /^bold 14px/);
+	watch.restore();
+});
+
+const ALERT = {
+	itemType: "alertUpdate",
+	lineRef: STOP.lineRef,
+	lineName: "4",
+	alertCount: 1,
+	alertText: "Jusqu'au 19 décembre inclus, l'arrêt n'est pas desservi à Saint-Michel (travaux de rénovation)",
+};
+
+test("a line with traffic info gets its own screen, and its stops say so", async () => {
+	const watch = await started();
+	watch.deliver(ALERT);
+	assert.ok(watch.screen().includes("Info trafic : 1"));
+	watch.press("down");
+	// The text takes the whole screen (no cycle hint).
+	assert.deepStrictEqual(watch.screen(), ["4", ALERT.alertText]);
+	// Disruption over: the screen goes, back to the stop.
+	watch.deliver({ ...ALERT, alertCount: 0, alertText: undefined });
+	assert.strictEqual(watch.screen()[0], "Réglages");
+	watch.restore();
+});
+
+test("a line added in the alerts section always has a screen", async () => {
+	const watch = await loadWatch();
+	watch.connect();
+	const items = configItems([]);
+	items[0].itemCount = 2;
+	items.push({ itemIndex: 1, itemCount: 2, itemType: "configLine", lineRef: "STIF:Line::C01743:", lineName: "RER B" });
+	for (const item of items) watch.deliver(item);
+	assert.deepStrictEqual(watch.screen().slice(0, 2), ["RER B", "..."]);
+	watch.deliver({ itemType: "alertUpdate", lineRef: "STIF:Line::C01743:", lineName: "RER B", alertCount: 0 });
+	assert.deepStrictEqual(watch.screen().slice(0, 2), ["RER B", "Pas de perturbation"]);
+	watch.restore();
+});
+
+test("alerts are asked again every 10 minutes", async () => {
+	const watch = await started();
+	const asks = () => watch.sent.filter((m) => m.itemType === "refreshAlerts").length;
+	const before = asks();
+	watch.advance(10 * 60000);
+	assert.strictEqual(asks(), before + 1);
+	watch.restore();
+});
+
+test("with auto-open, one wakeup at the next schedule start, none without", async () => {
+	const watch = await loadWatch();
+	watch.connect();
+	// Every day at 07:30.
+	for (const item of configItems([STOP], "fr", 0, { scheduleDaysBitmask: 127, scheduleStartMinutes: 450, autoOpen: 1 })) {
+		watch.deliver(item);
+	}
+	assert.strictEqual(watch.wakeups.size, 1);
+	const [wake] = [...watch.wakeups.values()];
+	const at = new Date(wake.time);
+	assert.deepStrictEqual([at.getHours(), at.getMinutes()], [7, 30]);
+	assert.ok(wake.time > watch.now && wake.time - watch.now <= 24 * 3600000);
+	// Turned off: the wakeup is cancelled.
+	for (const item of configItems([STOP], "fr", 0, { scheduleDaysBitmask: 127, scheduleStartMinutes: 450, autoOpen: 0 })) {
+		watch.deliver(item);
+	}
+	assert.strictEqual(watch.wakeups.size, 0);
 	watch.restore();
 });

@@ -41,6 +41,8 @@ async function loadWatch(options = {}) {
 	let failNextWrite = null;
 	let app = null;
 	const vibrations = [];
+	const wakeups = new Map(); // id -> { time, cookie }
+	let nextWakeupId = 1;
 	const watchListeners = {};
 	const connected = { app: true, pebblekit: true };
 
@@ -117,6 +119,15 @@ async function loadWatch(options = {}) {
 		longPulse: () => vibrations.push("long"),
 		doublePulse: () => vibrations.push("double"),
 	};
+	fakes.__WakeUp = {
+		schedule: (time, cookie) => {
+			const id = nextWakeupId++;
+			wakeups.set(id, { time, cookie });
+			return id;
+		},
+		cancel: (id) => wakeups.delete(id),
+		query: (id) => wakeups.get(id) || null,
+	};
 	fakes.watch = {
 		connected,
 		addEventListener: (name, fn) => {
@@ -135,7 +146,8 @@ async function loadWatch(options = {}) {
 			'import Message from "pebble/message";',
 			"const Message = globalThis.__Message;"
 		)
-		.replace('import Vibes from "pebble/vibes";', "const Vibes = globalThis.__Vibes;");
+		.replace('import Vibes from "pebble/vibes";', "const Vibes = globalThis.__Vibes;")
+		.replace('import WakeUp from "pebble/wakeup";', "const WakeUp = globalThis.__WakeUp;");
 	const file = path.join(os.tmpdir(), `stroycommute-main-${process.pid}-${++loads}.mjs`);
 	fs.writeFileSync(file, source);
 	try {
@@ -156,6 +168,7 @@ async function loadWatch(options = {}) {
 		storage,
 		sent,
 		vibrations,
+		wakeups,
 		/** Fires a `watch` event (minutechange, connected...). */
 		emit(name) {
 			for (const fn of watchListeners[name] || []) fn();
@@ -230,7 +243,7 @@ async function loadWatch(options = {}) {
 }
 
 /** Config items as pkjs's sendConfigToWatch sends them. */
-function configItems(stops, language = "fr", vibrateMinutes = 0) {
+function configItems(stops, language = "fr", vibrateMinutes = 0, meta = {}) {
 	const count = 1 + stops.length;
 	return [
 		{
@@ -243,6 +256,7 @@ function configItems(stops, language = "fr", vibrateMinutes = 0) {
 			timelineEnabled: 0,
 			language,
 			vibrateMinutes,
+			...meta,
 		},
 		...stops.map((stop, i) => ({
 			itemIndex: 1 + i,

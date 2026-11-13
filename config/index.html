@@ -54,6 +54,7 @@
   .moveBtn { background: #444; padding: 8px 14px; font-size: 15px; line-height: 1; }
   .moveBtn:disabled { opacity: 0.3; }
   #diagText { width: 100%; margin-top: 8px; padding: 8px; font-family: monospace; font-size: 12px; background: #111; color: #ddd; border: 1px solid #444; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .optionRow { display: block; margin-top: 10px; }
   .diagButtons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 </style>
 </head>
@@ -93,14 +94,15 @@
     <div id="directionPicker"></div>
   </fieldset>
 
-  <!-- Traffic alerts aren't implemented yet (fetchLineAlerts() is a stub on
-       the watch) -- hidden until they are, see ALERTS_ENABLED below. -->
+  <!-- Traffic alerts (PRIM general-message, fetched by pkjs). Hidden when
+       ALERTS_ENABLED below is false. -->
   <div id="alertsSection" hidden>
     <fieldset>
       <legend data-i18n="linesLegend">Lignes suivies (alertes trafic)</legend>
       <div id="linesList"></div>
       <input type="text" id="lineSearchInput" data-i18n-placeholder="lineSearchPlaceholder" placeholder="Rechercher une ligne (ex : 4, RER A)" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceSearch('line')" disabled>
       <div id="lineSearchResults" class="searchResults"></div>
+      <div class="searchStatus" data-i18n="linesHint">Les lignes de tes arrêts suivis sont surveillées automatiquement. Ajoute ici d'autres lignes à surveiller.</div>
     </fieldset>
 
     <fieldset>
@@ -118,6 +120,9 @@
         <label><span data-i18n="scheduleStart">Début</span> <input type="time" id="scheduleStart" value="07:00"></label>
         <label><span data-i18n="scheduleEnd">Fin</span> <input type="time" id="scheduleEnd" value="19:30"></label>
       </div>
+      <label class="optionRow"><input type="checkbox" id="notifyAlerts" checked> <span data-i18n="notifyLabel">Me notifier sur la montre d'une nouvelle perturbation pendant ce créneau</span></label>
+      <label class="optionRow"><input type="checkbox" id="autoOpen"> <span data-i18n="autoOpenLabel">Ouvrir l'app au début du créneau</span></label>
+      <div class="searchStatus" data-i18n="alertsHint">Les alertes sont vérifiées quand l'app est ouverte, toutes les 10 minutes. L'ouverture automatique permet de les vérifier (et d'avoir tes horaires) dès le début du créneau.</div>
     </fieldset>
 
     <fieldset>
@@ -179,7 +184,7 @@
   var MAX_ITEMS = 8;
   // Traffic alerts (followed lines, schedule, timeline) aren't implemented
   // on the watch yet: their section stays hidden and no line is saved.
-  var ALERTS_ENABLED = false;
+  var ALERTS_ENABLED = true;
 
   // UI strings. Keep the language list in sync with SUPPORTED_LANGUAGES in
   // src/pkjs/index.js and STRINGS in src/embeddedjs/main.js. "{name}"
@@ -209,12 +214,16 @@
       moveUp: "Monter",
       moveDown: "Descendre",
       linesLegend: "Lignes suivies (alertes trafic)",
+      linesHint: "Les lignes de tes arrêts suivis sont surveillées automatiquement. Ajoute ici d'autres lignes à surveiller.",
+      notifyLabel: "Me notifier sur la montre d'une nouvelle perturbation pendant ce créneau",
+      autoOpenLabel: "Ouvrir l'app au début du créneau",
+      alertsHint: "Les alertes sont vérifiées quand l'app est ouverte, toutes les 10 minutes. L'ouverture automatique permet de les vérifier (et d'avoir tes horaires) dès le début du créneau.",
       lineSearchPlaceholder: "Rechercher une ligne (ex : 4, RER A)",
-      scheduleLegend: "Période de réception des alertes",
+      scheduleLegend: "Créneau de trajet (alertes)",
       dayMon: "Lun", dayTue: "Mar", dayWed: "Mer", dayThu: "Jeu", dayFri: "Ven", daySat: "Sam", daySun: "Dim",
       scheduleStart: "Début",
       scheduleEnd: "Fin",
-      timelineLabel: "Ajouter les infos IDFM (ex : fin d'incident) à la timeline",
+      timelineLabel: "Ajouter les perturbations de mes lignes, et leur fin, à la timeline",
       save: "Enregistrer",
       keyChecking: "Vérification...",
       keyValid: "Clé valide ✓",
@@ -288,12 +297,16 @@
       moveUp: "Move up",
       moveDown: "Move down",
       linesLegend: "Followed lines (traffic alerts)",
+      linesHint: "The lines of your tracked stops are watched automatically. Add other lines to watch here.",
+      notifyLabel: "Notify me on the watch of a new disruption during this window",
+      autoOpenLabel: "Open the app when the window starts",
+      alertsHint: "Alerts are checked while the app is open, every 10 minutes. Opening it automatically checks them (and shows your times) as the window starts.",
       lineSearchPlaceholder: "Search a line (e.g. 4, RER A)",
-      scheduleLegend: "Alert schedule",
+      scheduleLegend: "Commute window (alerts)",
       dayMon: "Mon", dayTue: "Tue", dayWed: "Wed", dayThu: "Thu", dayFri: "Fri", daySat: "Sat", daySun: "Sun",
       scheduleStart: "Start",
       scheduleEnd: "End",
-      timelineLabel: "Add IDFM notices (e.g. end of disruption) to the timeline",
+      timelineLabel: "Add my lines' disruptions, and their end, to the timeline",
       save: "Save",
       keyChecking: "Checking...",
       keyValid: "Valid key ✓",
@@ -1391,6 +1404,8 @@
       callGuard: callGuard,
       vibrateMinutes: parseInt(document.getElementById("vibrateMinutes").value, 10) || 0,
       pluginEnabled: document.getElementById("pluginEnabled").checked,
+      notifyAlerts: document.getElementById("notifyAlerts").checked,
+      autoOpen: document.getElementById("autoOpen").checked,
       language: document.getElementById("language").value
     };
     var json = JSON.stringify(config);
@@ -1430,6 +1445,8 @@
     document.getElementById("timelineEnabled").checked = !!initial.timelineEnabled;
     document.getElementById("vibrateMinutes").value = String(initial.vibrateMinutes || 0);
     document.getElementById("pluginEnabled").checked = initial.pluginEnabled !== false;
+    document.getElementById("notifyAlerts").checked = initial.notifyAlerts !== false;
+    document.getElementById("autoOpen").checked = !!initial.autoOpen;
     var guard = initial.callGuard || {};
     if (typeof guard.maxCalls === "number") document.getElementById("guardMaxCalls").value = guard.maxCalls;
     if (typeof guard.windowMinutes === "number") document.getElementById("guardWindow").value = guard.windowMinutes;
