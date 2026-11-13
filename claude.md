@@ -119,6 +119,28 @@ files under `/mnt/d`.
   error, stop with no real-time data available (not an error), quota
   exceeded (HTTP 429).
 
+## Changelog
+
+`CHANGELOG.md` is the source of the release notes: the Release workflow
+(`scripts/release-notes.js`) moves its `[Unreleased]` section under the new
+version and turns it into the GitHub release body and the plain text pasted
+into the appstore. Keeping it up to date is Claude's job, not the user's:
+
+- Every time you change something a user of the app can notice (new
+  feature, behaviour change, fix, performance, permissions, settings page),
+  add one entry under `## [Unreleased]`, in the same change/commit.
+- Put it under `### Nouveautés`, `### Améliorations` or `### Corrections`
+  (create the heading if missing, in that order).
+- Write it in French, as one sentence for app users, not developers: what
+  changes for them, not how it was implemented. No file names, function
+  names or commit jargon.
+- If a change refines an entry already under `[Unreleased]`, update that
+  entry instead of adding another.
+- Purely internal changes (refactors, tests, CI, docs, tooling) get no
+  entry, unless they change something users see.
+- Never edit the sections of released versions, and never bump the version
+  in `package.json` by hand: the Release workflow does both.
+
 ## Code style
 
 - TypeScript/JavaScript, pnpm if dependencies are needed on the pkjs side
