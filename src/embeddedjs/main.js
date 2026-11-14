@@ -1258,6 +1258,8 @@ function describeScreen() {
 	if (!item) {
 		model.line = configLoaded ? t("noStops") : t("loading");
 		if (configLoaded) model.footer = t("configureHint");
+		// Launched with the phone out of reach: the config can't come yet.
+		else if (!phoneConnected()) model.alert = t("phoneDisconnected");
 		return model;
 	}
 	const dep =
@@ -1671,7 +1673,15 @@ if (typeof watch !== "undefined") {
 		safe("connected", () => {
 			note(`connected ${phoneConnected()}`);
 			render();
-			if (phoneConnected()) requestRefresh(false);
+			if (!phoneConnected()) return;
+			// The phone is back before the config ever came (the app was
+			// launched without it, and the retries may be spent): ask again.
+			if (!configLoaded) {
+				configResendCount = 0;
+				requestConfigResend();
+				return;
+			}
+			requestRefresh(false);
 		})
 	);
 }

@@ -149,6 +149,23 @@ test("config requests made while the phone is unreachable don't use up the retri
 	watch.restore();
 });
 
+test("launched without the phone: says so, and asks for the config again once it's back", async () => {
+	const watch = await loadWatch();
+	watch.setPhoneConnected(false);
+	assert.ok(watch.screen().includes("Phone disconnected"));
+	// The phone side opened, but the config never came: retries spent.
+	watch.connect();
+	watch.advance(10000);
+	const requests = () => watch.sent.filter((m) => m.itemType === "configResendRequest").length;
+	assert.strictEqual(requests(), 3);
+	watch.setPhoneConnected(true);
+	assert.strictEqual(requests(), 4);
+	assert.ok(!watch.screen().includes("Phone disconnected"));
+	for (const item of configItems([STOP])) watch.deliver(item);
+	assert.strictEqual(watch.screen()[0], "4 — Bagneux");
+	watch.restore();
+});
+
 test("Down cycles to the settings screen with the quota", async () => {
 	const watch = await started();
 	watch.deliver(OK);
