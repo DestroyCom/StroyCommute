@@ -11,6 +11,7 @@ with a plain-text version to paste into the store.
 ### New
 
 - "Watch screens" setting: stops and alerts, stops only, or alerts only.
+- "Lift the pause and refresh everything" button in the settings: ends the anti-quota pause and asks again for every time and alert right away.
 - Traffic alerts: disruptions on the lines of your stops (and on lines you add) show on the watch, with one screen per disrupted line and a reminder on the stop's screen. Every disruption can be read in full, the most urgent first.
 - Watch notification when a new disruption appears during your commute window (adjustable), as long as the app is open (the option to open it automatically when the window starts takes care of that), and disruptions and their end added to the timeline (option), including those already under way when you turn it on; the settings remind you to allow the timeline for the app in the Pebble app.
 - Option to open the app automatically when your commute window starts.
@@ -37,7 +38,10 @@ with a plain-text version to paste into the store.
 - Correcting the API key in the settings now updates the times, even if a request with the old key was under way.
 - The line search in the settings finds "RER A", "Métro 4" or "Tram 3a", and accepts a single letter or digit ("A", "4"); each result shows the kind of line (RER, Transilien, Metro, Tram, Bus).
 - The traffic alert screen of a line added without a stop shows the line's colour.
+- Requests that fail because the phone has no connection no longer count towards the PRIM call limit, so being offline can't trigger the anti-quota pause.
+- Opened while the phone is out of reach, the app says so instead of loading forever, and loads as soon as the phone is back.
 - A train at the platform now shows before a train whose departure time has just passed.
+- A train that has left no longer stays shown "at the platform" for two more minutes: the next one takes over a minute after its departure time.
 - A stuck transfer between the watch and the phone can no longer freeze refreshes.
 - A PRIM request that doesn't answer shows a network error after 10 seconds instead of hanging.
 - Times received by the watch are sent again if it was busy, instead of being lost until the next refresh.

@@ -156,6 +156,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
       <label><span data-i18n="guardWindow">W (minutes)</span> <input type="number" id="guardWindow" min="1" step="1" value="10"></label>
       <label><span data-i18n="guardPause">P (pause, minutes)</span> <input type="number" id="guardPause" min="1" step="1" value="15"></label>
     </div>
+    <button type="button" onclick="resetGuard()" data-i18n="guardReset">Lever la pause et tout rafraîchir</button>
   </fieldset>
 
   <fieldset>
@@ -261,6 +262,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
       allTrains: "tous les trains",
       guardLegend: "Garde-fou appels PRIM",
       guardHint: "Après N appels en W minutes, plus aucun appel pendant P minutes. N = 0 : désactivé.",
+      guardReset: "Lever la pause et tout rafraîchir",
+      guardResetConfirm: "Lever la pause anti-quota et redemander tous les horaires et alertes ? La page se fermera sans enregistrer tes autres modifications.",
       guardMaxCalls: "N (appels max)",
       guardWindow: "W (minutes)",
       guardPause: "P (pause, minutes)",
@@ -350,6 +353,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
       allTrains: "all trains",
       guardLegend: "PRIM call guard",
       guardHint: "After N calls within W minutes, no call for P minutes. N = 0: disabled.",
+      guardReset: "Lift the pause and refresh everything",
+      guardResetConfirm: "Lift the quota pause and ask again for every time and alert? The page will close without saving your other changes.",
       guardMaxCalls: "N (max calls)",
       guardWindow: "W (minutes)",
       guardPause: "P (pause, minutes)",
@@ -1447,6 +1452,12 @@ const CONFIG_HTML = `<!DOCTYPE html>
     document.location = "pebblejs://close#" + encodeURIComponent(JSON.stringify({ action: "clearDiag" }));
   }
 
+  /** Closes the webview asking pkjs to lift the call guard's pause and refresh. */
+  function resetGuard() {
+    if (!confirm(t("guardResetConfirm"))) return;
+    document.location = "pebblejs://close#" + encodeURIComponent(JSON.stringify({ action: "resetGuard" }));
+  }
+
   /** Validates the form, then closes the webview with the config as JSON. */
   function save() {
     var stops = collectStops();
@@ -1821,9 +1832,34 @@ Pebble.addEventListener(
 			localStorage.removeItem(DIAG_KEY);
 			return;
 		}
+		// Config page > PRIM call guard > Lift the pause: also closes
+		// without saving.
+		if (config.action === "resetGuard") {
+			resetGuardAndRefresh();
+			return;
+		}
 		saveConfig(config);
 	})
 );
+
+/**
+ * Lifts the call guard's pause (and forgets its counted calls), then has
+ * everything asked again: cached answers dropped, traffic info due, and the
+ * config sent again so the watch requests every stop right away.
+ */
+function resetGuardAndRefresh() {
+	localStorage.removeItem("stroycommuteCallGuard");
+	responseCache.clear();
+	// Due now, messages kept (to tell new from ended ones).
+	const cache = readJson(ALERTS_KEY, {});
+	for (const lineRef of Object.keys(cache)) cache[lineRef].at = 0;
+	localStorage.setItem(ALERTS_KEY, JSON.stringify(cache));
+	const config = storedConfig();
+	if (!config) return;
+	configId += 1; // replies to earlier requests are now stale
+	sendConfigToWatch(config);
+	refreshAlerts();
+}
 
 /** @param {object} config - The config page's saved settings. */
 function saveConfig(config) {
@@ -2121,6 +2157,22 @@ function checkCallGuard(config, count) {
 }
 
 /**
+ * Gives back to the call guard one call that never reached PRIM (no
+ * connection: no HTTP answer at all), so being offline can't start a
+ * pause. A timed-out call may have reached PRIM and stays counted.
+ */
+function refundGuardCall() {
+	const state = readJson("stroycommuteCallGuard", null);
+	if (!state || !Array.isArray(state.calls) || state.calls.length === 0) return;
+	const calls = state.calls.slice().sort((a, b) => a - b);
+	calls.pop();
+	localStorage.setItem(
+		"stroycommuteCallGuard",
+		JSON.stringify(Object.assign({}, state, { calls: calls }))
+	);
+}
+
+/**
  * @param {XMLHttpRequest} xhr - A finished PRIM request.
  * @returns {?number} The endpoint's calls left today, from PRIM's
  *   X-Ratelimit-Remaining-Day header, null when absent.
@@ -2249,6 +2301,10 @@ function fetchStopVisits(apiKey, stopRef, lineRef, done) {
 		// local estimate.
 		const remaining = remainingQuota(xhr);
 		if (remaining !== null) lastQuotaRemaining = remaining;
+		if (xhr.status === 0) {
+			refundGuardCall(); // no connection: PRIM never saw it
+			return finish("network");
+		}
 		if (xhr.status === 429) return finish("quotaExceeded");
 		if (xhr.status === 401 || xhr.status === 403) return finish("invalidKey");
 		if (xhr.status === 400 || xhr.status === 404) {
@@ -2267,7 +2323,10 @@ function fetchStopVisits(apiKey, stopRef, lineRef, done) {
 		}
 		finish("ok", visits);
 	});
-	xhr.onerror = guarded("stop-monitoring.onerror", () => finish("network"));
+	xhr.onerror = guarded("stop-monitoring.onerror", () => {
+		if (!finished) refundGuardCall(); // no connection: PRIM never saw it
+		finish("network");
+	});
 	lastQuotaRemaining = recordPrimRequestAndGetQuotaRemaining();
 	xhr.send();
 }
@@ -2606,7 +2665,10 @@ function fetchGeneralMessages(apiKey, lineRef, done) {
 		}
 		finish(alerts.parseGeneralMessages(JSON.parse(xhr.responseText), lineRef));
 	});
-	xhr.onerror = guarded("general-message.onerror", () => finish(null));
+	xhr.onerror = guarded("general-message.onerror", () => {
+		if (!finished) refundGuardCall(); // no connection: PRIM never saw it
+		finish(null);
+	});
 	xhr.send();
 }
 

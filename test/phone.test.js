@@ -68,6 +68,53 @@ test("a PRIM request that never answers ends as a network error", () => {
 	phone.restore();
 });
 
+test("calls that never reached PRIM (offline) don't count against the call guard", () => {
+	const config = { ...CONFIG, callGuard: { maxCalls: 2, windowMinutes: 10, pauseMinutes: 15 } };
+	const phone = loadPhone({ storage: new Map([["stroycommuteConfig", JSON.stringify(config)]]) });
+	for (let i = 0; i < 4; i++) {
+		phone.fromWatch(REFRESH);
+		const xhr = phone.requests.at(-1);
+		if (i % 2) xhr.onerror();
+		else xhr.respond(0, "");
+		phone.advance(25000); // past the answer cache
+	}
+	assert.strictEqual(phone.requests.length, 4);
+	assert.deepStrictEqual(
+		updates(phone).map((u) => u.state),
+		["network", "network", "network", "network"]
+	);
+	// A call that timed out may have reached PRIM: it stays counted.
+	phone.fromWatch(REFRESH);
+	phone.advance(10000);
+	phone.advance(25000);
+	phone.fromWatch(REFRESH);
+	phone.requests.at(-1).respond(200, siriAnswer(phone.now, [5]));
+	phone.advance(25000);
+	const before = phone.requests.length;
+	phone.fromWatch(REFRESH);
+	assert.strictEqual(phone.requests.length, before); // guard full: no call
+	const last = updates(phone).at(-1);
+	assert.ok(last.state === "rateLimited" || last.staleReason === "rateLimited");
+	phone.restore();
+});
+
+test("the settings' reset lifts the quota pause and has everything asked again", () => {
+	const phone = withConfig();
+	phone.storage.set("stroycommuteCallGuard", JSON.stringify({ calls: [], pausedUntil: phone.now + 10 * 60000 }));
+	phone.fromWatch(REFRESH); // paused: no call
+	assert.strictEqual(phone.requests.length, 0);
+	const configsBefore = phone.sent.filter((m) => m.itemType === "configMeta").length;
+	phone.fire("webviewclosed", { response: encodeURIComponent(JSON.stringify({ action: "resetGuard" })) });
+	// The watch gets the config again (and asks every stop right away).
+	assert.strictEqual(phone.sent.filter((m) => m.itemType === "configMeta").length, configsBefore + 1);
+	assert.strictEqual(JSON.parse(phone.storage.get("stroycommuteConfig")).apiKey, "key"); // settings kept
+	// Traffic info checked again right away.
+	assert.ok(phone.requests.some((r) => /general-message/.test(r.url)));
+	phone.fromWatch(REFRESH);
+	assert.ok(phone.requests.some((r) => /stop-monitoring/.test(r.url)));
+	phone.restore();
+});
+
 test("a reply the watch refuses is sent again, up to two more times", () => {
 	const phone = withConfig({ nacks: 5 });
 	phone.fromWatch(REFRESH);

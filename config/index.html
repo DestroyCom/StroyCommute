@@ -146,6 +146,7 @@
       <label><span data-i18n="guardWindow">W (minutes)</span> <input type="number" id="guardWindow" min="1" step="1" value="10"></label>
       <label><span data-i18n="guardPause">P (pause, minutes)</span> <input type="number" id="guardPause" min="1" step="1" value="15"></label>
     </div>
+    <button type="button" onclick="resetGuard()" data-i18n="guardReset">Lever la pause et tout rafraîchir</button>
   </fieldset>
 
   <fieldset>
@@ -251,6 +252,8 @@
       allTrains: "tous les trains",
       guardLegend: "Garde-fou appels PRIM",
       guardHint: "Après N appels en W minutes, plus aucun appel pendant P minutes. N = 0 : désactivé.",
+      guardReset: "Lever la pause et tout rafraîchir",
+      guardResetConfirm: "Lever la pause anti-quota et redemander tous les horaires et alertes ? La page se fermera sans enregistrer tes autres modifications.",
       guardMaxCalls: "N (appels max)",
       guardWindow: "W (minutes)",
       guardPause: "P (pause, minutes)",
@@ -340,6 +343,8 @@
       allTrains: "all trains",
       guardLegend: "PRIM call guard",
       guardHint: "After N calls within W minutes, no call for P minutes. N = 0: disabled.",
+      guardReset: "Lift the pause and refresh everything",
+      guardResetConfirm: "Lift the quota pause and ask again for every time and alert? The page will close without saving your other changes.",
       guardMaxCalls: "N (max calls)",
       guardWindow: "W (minutes)",
       guardPause: "P (pause, minutes)",
@@ -1435,6 +1440,12 @@
   function clearDiag() {
     if (!confirm(t("diagClearConfirm"))) return;
     document.location = "pebblejs://close#" + encodeURIComponent(JSON.stringify({ action: "clearDiag" }));
+  }
+
+  /** Closes the webview asking pkjs to lift the call guard's pause and refresh. */
+  function resetGuard() {
+    if (!confirm(t("guardResetConfirm"))) return;
+    document.location = "pebblejs://close#" + encodeURIComponent(JSON.stringify({ action: "resetGuard" }));
   }
 
   /** Validates the form, then closes the webview with the config as JSON. */
