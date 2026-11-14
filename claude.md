@@ -179,9 +179,9 @@ into the appstore. Keeping it up to date is Claude's job, not the user's:
 - Every time you change something a user of the app can notice (new
   feature, behaviour change, fix, performance, permissions, settings page),
   add one entry under `## [Unreleased]`, in the same change/commit.
-- Put it under `### Nouveautés`, `### Améliorations` or `### Corrections`
+- Put it under `### New`, `### Improvements` or `### Fixes`
   (create the heading if missing, in that order).
-- Write it in French, as one sentence for app users, not developers: what
+- Write it in English, as one sentence for app users, not developers: what
   changes for them, not how it was implemented. No file names, function
   names or commit jargon.
 - If a change refines an entry already under `[Unreleased]`, update that

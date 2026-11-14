@@ -1,47 +1,48 @@
 # Changelog
 
-Les changements visibles de StroyCommute, version par version. Ajoutez
-chaque changement sous `[Unreleased]`, en une phrase écrite pour les
-utilisateurs, dans la bonne rubrique (Nouveautés, Améliorations,
-Corrections). Le workflow Release déplace cette section sous le numéro de
-la nouvelle version et en fait les notes de la release GitHub, avec une
-version texte à coller dans le store.
+StroyCommute's user-visible changes, version by version. Add each change
+under `[Unreleased]`, as one sentence written for users, under the right
+heading (New, Improvements, Fixes). The Release workflow moves this section
+under the new version number and turns it into the GitHub release notes,
+with a plain-text version to paste into the store.
 
 ## [Unreleased]
 
-### Nouveautés
+### New
 
-- Réglage « Écrans sur la montre » : arrêts et alertes, arrêts seulement ou alertes seulement.
-- Alertes trafic : les perturbations des lignes de tes arrêts (et des lignes que tu ajoutes) s'affichent sur la montre, avec un écran par ligne perturbée et un rappel sur l'écran de l'arrêt. Chaque perturbation est lisible en entier, la plus urgente en premier.
-- Notification sur la montre quand une nouvelle perturbation apparaît pendant ton créneau de trajet (réglable), tant que l'app est ouverte (l'option d'ouverture automatique au début du créneau s'en charge), et ajout des perturbations et de leur fin à la timeline (option), y compris celles déjà en cours quand tu l'actives ; les réglages rappellent d'autoriser la timeline pour l'app dans l'app Pebble.
-- Option pour ouvrir l'app automatiquement au début de ton créneau de trajet.
-- Tes prochains départs peuvent s'afficher sur les cadrans compatibles avec les plugins Pebble (aperçu à activer dans l'app Pebble), avec une consommation de quota limitée. Réglage « Cadrans » pour le désactiver.
-- Compatible avec la Pebble Round 2 : mise en page adaptée à l'écran rond.
-- Vibration à l'approche du train, au choix de 1 à 10 minutes avant le départ (réglage « Vibration », désactivé par défaut).
-- La montre indique quand le téléphone est déconnecté, tout en gardant les derniers horaires affichés.
-- Section **Diagnostic** dans les réglages : les erreurs rencontrées par l'app sont enregistrées et peuvent être copiées pour les envoyer au développeur.
+- "Watch screens" setting: stops and alerts, stops only, or alerts only.
+- Traffic alerts: disruptions on the lines of your stops (and on lines you add) show on the watch, with one screen per disrupted line and a reminder on the stop's screen. Every disruption can be read in full, the most urgent first.
+- Watch notification when a new disruption appears during your commute window (adjustable), as long as the app is open (the option to open it automatically when the window starts takes care of that), and disruptions and their end added to the timeline (option), including those already under way when you turn it on; the settings remind you to allow the timeline for the app in the Pebble app.
+- Option to open the app automatically when your commute window starts.
+- Your next departures can show on watchfaces that support Pebble plugins (preview to turn on in the Pebble app), with limited quota use. "Watchfaces" setting to turn it off.
+- Pebble Round 2 support: layout adapted to the round screen.
+- Vibration as the train approaches, from 1 to 10 minutes before departure ("Vibration" setting, off by default).
+- The watch shows when the phone is disconnected, while keeping the last departure times on screen.
+- **Diagnostics** section in the settings: errors the app runs into are recorded and can be copied to send to the developer.
 
-### Améliorations
+### Improvements
 
-- Une erreur inattendue ne ferme plus l'application : elle est enregistrée et l'app continue de fonctionner.
-- Compatibilité avec les dernières versions de l'app Pebble : les accès réseau à PRIM et à la recherche d'arrêts IDFM sont déclarés.
-- Affichage plus léger sur la montre : l'écran n'est plus redessiné entièrement à chaque mise à jour, ce qui économise mémoire et batterie.
-- Moins d'appels à l'API PRIM : une même demande faite plusieurs fois en quelques secondes ne coûte plus qu'un appel sur ton quota.
-- Les minutes avant le départ se mettent à jour toutes seules chaque minute, et le train suivant prend le relais quand le premier est parti.
-- Quand le prochain départ est à plus de 10 minutes, les horaires sont rafraîchis toutes les 3 minutes au lieu de chaque minute : moins de batterie et de quota consommés.
-- Couleurs des lignes ajustées à l'écran de la montre, avec un texte toujours lisible sur le bandeau.
-- Le quota PRIM affiché sur la montre est désormais celui annoncé par PRIM, et non plus une estimation.
-- Les trajets avec arrêt d'arrivée tiennent dans le bandeau grâce à un texte plus petit quand il est long.
+- An unexpected error no longer closes the app: it is recorded and the app keeps working.
+- Works with the latest versions of the Pebble app: network access to PRIM and to the IDFM stop search is declared.
+- Lighter display on the watch: the screen is no longer fully redrawn on every update, which saves memory and battery.
+- Fewer PRIM API calls: the same request made several times within a few seconds now costs only one call from your quota.
+- The minutes until departure update by themselves every minute, and the next train takes over once the first has left.
+- When the next departure is more than 10 minutes away, times are refreshed every 3 minutes instead of every minute: less battery and quota used.
+- Line colours adjusted to the watch's screen, with text that is always readable on the banner.
+- The PRIM quota shown on the watch is now the one PRIM reports, no longer an estimate.
+- Trips with an arrival stop fit in the banner thanks to smaller text when it is long.
 
-### Corrections
+### Fixes
 
-- Corriger la clé API dans les réglages remet bien les horaires à jour, même si une demande était en cours avec l'ancienne clé.
-- Un train à quai s'affiche bien avant un train dont l'heure de départ vient de passer.
-- Un envoi bloqué entre la montre et le téléphone ne peut plus figer les rafraîchissements.
-- Une requête PRIM qui ne répond pas affiche une erreur réseau au bout de 10 secondes au lieu de rester sans réponse.
-- Les horaires reçus par la montre sont renvoyés si elle était occupée, au lieu d'être perdus jusqu'au rafraîchissement suivant.
-- Des réglages enregistrés par une ancienne version ou abîmés n'empêchent plus l'app de démarrer.
-- Sans arrêt configuré, la montre l'indique et explique où en ajouter, au lieu d'afficher l'écran Réglages.
+- Correcting the API key in the settings now updates the times, even if a request with the old key was under way.
+- The line search in the settings finds "RER A", "Métro 4" or "Tram 3a", and accepts a single letter or digit ("A", "4"); each result shows the kind of line (RER, Transilien, Metro, Tram, Bus).
+- The traffic alert screen of a line added without a stop shows the line's colour.
+- A train at the platform now shows before a train whose departure time has just passed.
+- A stuck transfer between the watch and the phone can no longer freeze refreshes.
+- A PRIM request that doesn't answer shows a network error after 10 seconds instead of hanging.
+- Times received by the watch are sent again if it was busy, instead of being lost until the next refresh.
+- Settings saved by an older version, or damaged, no longer stop the app from starting.
+- With no stop configured, the watch says so and explains where to add one, instead of showing the Settings screen.
 
 ## [1.0.0]
 

@@ -82,7 +82,7 @@ function entriesFromCommits(commits) {
 		.map((c) => c.subject)
 		.filter((s) => !/^chore: release v/.test(s) && !/^Merge /.test(s))
 		.map((s) => `- ${s}`);
-	return items.length ? `### Changements\n\n${items.join("\n")}` : "";
+	return items.length ? `### Changes\n\n${items.join("\n")}` : "";
 }
 
 /**

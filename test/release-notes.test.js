@@ -49,7 +49,7 @@ test("store text is plain", () => {
 test("commit fallback skips release commits and merges", () => {
 	assert.strictEqual(
 		entriesFromCommits([{ subject: "chore: release v1.0.1" }, { subject: "Merge pull request #3" }, { subject: "Fix X" }]),
-		"### Changements\n\n- Fix X"
+		"### Changes\n\n- Fix X"
 	);
 	assert.strictEqual(entriesFromCommits([]), "");
 });
