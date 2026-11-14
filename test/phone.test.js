@@ -361,6 +361,27 @@ test("alerts: more lines than the call guard allows are checked in turns, withou
 	phone.restore();
 });
 
+test("alerts: lines whose calls keep failing don't keep the others waiting", () => {
+	let now = Date.UTC(2026, 10, 13, 8);
+	const lines = ["A", "B", "C"].map((n) => ({ lineRef: `STIF:Line::${n}:`, lineName: n }));
+	const config = { ...ALERT_CONFIG, trackedLines: lines, trackedStops: [], callGuard: { maxCalls: 2, windowMinutes: 10, pauseMinutes: 15 } };
+	const storage = new Map([["stroycommuteConfig", JSON.stringify(config)]]);
+	let phone = loadPhone({ storage });
+	const pendingLines = () => phone.requests.filter((r) => /general-message/.test(r.url) && r.status === undefined);
+	phone.setNow(now);
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	assert.deepStrictEqual(pendingLines().map((r) => decodeURIComponent(r.url.split("LineRef=")[1])), ["STIF:Line::A:", "STIF:Line::B:"]);
+	for (const xhr of pendingLines()) xhr.respond(500, "{}");
+	phone.advance(2000);
+	phone.restore();
+	now += 11 * 60000;
+	phone = loadPhone({ storage });
+	phone.setNow(now);
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	assert.strictEqual(decodeURIComponent(pendingLines()[0].url.split("LineRef=")[1]), "STIF:Line::C:");
+	phone.restore();
+});
+
 test("alerts: two checks in a row never interleave their parts", () => {
 	const phone = loadPhone({ storage: new Map([["stroycommuteConfig", JSON.stringify(ALERT_CONFIG)]]) });
 	phone.fromWatch({ itemType: "refreshAlerts" });

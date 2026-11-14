@@ -2486,6 +2486,7 @@ const GENERAL_MESSAGE_URL =
 	"https://prim.iledefrance-mobilites.fr/marketplace/general-message";
 const ALERTS_KEY = "stroycommuteAlerts"; // lineRef -> { at, messages }
 const ALERTS_SEEN_KEY = "stroycommuteAlertSeen"; // message id -> first seen
+const ALERTS_TRIED_KEY = "stroycommuteAlertTried"; // lineRef -> last call (ms)
 const ALERTS_PINNED_KEY = "stroycommuteAlertPinned"; // message id -> true
 const ALERT_CACHE_MS = 10 * 60000;
 // Notifications per check, at most (several new messages at once usually
@@ -2558,18 +2559,21 @@ function refreshAlerts() {
 		}
 	}
 	const now = Date.now();
-	// Lines to check, the least recently checked (never first) first.
-	const age = (line) => {
-		const entry = cache[line.lineRef];
-		return entry ? now - entry.at : Number.POSITIVE_INFINITY;
-	};
+	// Lines due a check (no answer for ALERT_CACHE_MS), the least recently
+	// tried (never first) first: a line whose calls keep failing doesn't
+	// keep the others waiting.
+	const tried = readJson(ALERTS_TRIED_KEY, {});
+	const lastTry = (line) => tried[line.lineRef] || 0;
 	const due = lines
-		.filter((line) => age(line) >= ALERT_CACHE_MS)
+		.filter((line) => {
+			const entry = cache[line.lineRef];
+			return !(entry && now - entry.at < ALERT_CACHE_MS);
+		})
 		.map((line, i) => ({ line: line, i: i }))
 		.sort((a, b) => {
-			const aa = age(a.line);
-			const ab = age(b.line);
-			return aa === ab ? a.i - b.i : ab > aa ? 1 : -1;
+			const ta = lastTry(a.line);
+			const tb = lastTry(b.line);
+			return ta === tb ? a.i - b.i : ta - tb;
 		})
 		.map((x) => x.line);
 	// lineRef -> why its check failed ("rateLimited" or "network").
@@ -2594,6 +2598,12 @@ function refreshAlerts() {
 		finish();
 		return;
 	}
+	const nextTried = {};
+	for (const line of lines) {
+		if (tried[line.lineRef]) nextTried[line.lineRef] = tried[line.lineRef];
+	}
+	for (const line of toFetch) nextTried[line.lineRef] = now;
+	localStorage.setItem(ALERTS_TRIED_KEY, JSON.stringify(nextTried));
 	let pending = toFetch.length;
 	for (const line of toFetch) {
 		fetchGeneralMessages(config.apiKey, line.lineRef, (messages) => {
