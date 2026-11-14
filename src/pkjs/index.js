@@ -138,6 +138,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
     <fieldset>
       <legend>Timeline</legend>
       <label><input type="checkbox" id="timelineEnabled"> <span data-i18n="timelineLabel">Ajouter les infos IDFM (ex : fin d'incident) à la timeline</span></label>
+      <div class="searchStatus" data-i18n="timelineHint">Autorise aussi la timeline pour StroyCommute dans l'app Pebble (autorisations de l'app), sinon rien n'y apparaît.</div>
     </fieldset>
   </div>
 
@@ -234,6 +235,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
       scheduleStart: "Début",
       scheduleEnd: "Fin",
       timelineLabel: "Ajouter les perturbations de mes lignes, et leur fin, à la timeline",
+      timelineHint: "Autorise aussi la timeline pour StroyCommute dans l'app Pebble (autorisations de l'app), sinon rien n'y apparaît.",
       save: "Enregistrer",
       keyChecking: "Vérification...",
       keyValid: "Clé valide ✓",
@@ -317,6 +319,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
       scheduleStart: "Start",
       scheduleEnd: "End",
       timelineLabel: "Add my lines' disruptions, and their end, to the timeline",
+      timelineHint: "Also allow the timeline for StroyCommute in the Pebble app (the app's permissions), or nothing will show there.",
       save: "Save",
       keyChecking: "Checking...",
       keyValid: "Valid key ✓",
