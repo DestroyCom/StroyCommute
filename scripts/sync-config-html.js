@@ -25,9 +25,12 @@ if (!pattern.test(js)) {
 	console.error("CONFIG_HTML literal not found in src/pkjs/index.js");
 	process.exit(1);
 }
+// Backslashes doubled: in a template literal "\s" would become a bare "s"
+// (the page's regexes lost their \s and \S that way).
+const embedded = html.replace(/\\/g, "\\\\");
 const updated = js.replace(
 	pattern,
-	() => "const CONFIG_HTML = `" + html + "`;\n"
+	() => "const CONFIG_HTML = `" + embedded + "`;\n"
 );
 
 if (process.argv.includes("--check")) {

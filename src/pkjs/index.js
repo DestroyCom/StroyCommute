@@ -917,9 +917,9 @@ const CONFIG_HTML = `<!DOCTYPE html>
    * @returns {string} The query as a dataset line name.
    */
   function lineSearchName(query) {
-    var tram = /^tram(way)?\s*(t?)(\S.*)$/i.exec(query);
+    var tram = /^tram(way)?\\s*(t?)(\\S.*)$/i.exec(query);
     if (tram) return "T" + tram[3];
-    var stripped = query.replace(/^(rer|m[ée]tro|ligne|transilien|train)\s+/i, "");
+    var stripped = query.replace(/^(rer|m[ée]tro|ligne|transilien|train)\\s+/i, "");
     return stripped || query;
   }
 

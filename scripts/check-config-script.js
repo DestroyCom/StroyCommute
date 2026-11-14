@@ -10,6 +10,16 @@ if (!literal) {
 	process.exit(1);
 }
 const html = (0, eval)(literal[1]);
+// The page served must be config/index.html exactly, escapes included.
+const source = fs
+	.readFileSync(path.join(__dirname, "..", "config", "index.html"), "utf8")
+	.replace(/\r\n/g, "\n");
+if (html !== source) {
+	console.error(
+		"CONFIG_HTML doesn't evaluate to config/index.html (an escape lost once embedded?)"
+	);
+	process.exit(1);
+}
 const script = html.match(/<script>([\s\S]*)<\/script>/);
 try {
 	new Function(script[1]);
