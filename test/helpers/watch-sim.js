@@ -75,6 +75,14 @@ async function loadWatch(options = {}) {
 			constructor(dict) {
 				Object.assign(this, dict);
 			}
+			// Like Piu's: a single line's size. Every glyph is half the font
+			// size wide, "W" a whole one (to test wide text), lines 1.2x.
+			measure(string) {
+				const size = Number(/(\d+)px/.exec(this.font)[1]);
+				let width = 0;
+				for (const c of String(string)) width += c === "W" ? size : size / 2;
+				return { width: width, height: Math.round(size * 1.2) };
+			}
 		},
 		Container: FakeContent,
 		Label: FakeContent,

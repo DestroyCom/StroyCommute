@@ -654,6 +654,10 @@ function handleAlertUpdate(item) {
 		return;
 	}
 	pendingAlerts.delete(item.lineRef);
+	// One message per page, or more when it doesn't fit the body.
+	let fitted = [];
+	for (const message of entry.pages) fitted = fitted.concat(fitPages(message));
+	entry.pages = fitted;
 	const pages = entry.pages;
 	const previous = lineAlerts.get(item.lineRef);
 	lineAlerts.set(item.lineRef, entry);
@@ -672,6 +676,40 @@ function handleAlertUpdate(item) {
 	}
 	rebuildItems();
 	render();
+}
+
+/**
+ * @param {string} text - One alert message.
+ * @returns {string[]} It cut at spaces into pages that each fit the alert
+ *   body (LAYOUT.body, smallStyle), measured word by word as the Text view
+ *   wraps them: a message of wide glyphs can't run off the screen.
+ */
+function fitPages(text) {
+	const [, inset, height] = LAYOUT.body;
+	const width = screen.width - 2 * inset - 2;
+	const lineHeight = smallStyle.measure("Ag").height;
+	const maxLines = Math.max(1, Math.floor(height / lineHeight));
+	const pages = [];
+	let page = "";
+	let line = "";
+	let lines = 1;
+	for (const word of String(text).split(" ")) {
+		const longer = line ? `${line} ${word}` : word;
+		if (line && smallStyle.measure(longer).width > width) {
+			lines += 1;
+			line = word;
+			if (lines > maxLines) {
+				pages.push(page);
+				page = "";
+				lines = 1;
+			}
+		} else {
+			line = longer;
+		}
+		page = page ? `${page} ${word}` : word;
+	}
+	if (page) pages.push(page);
+	return pages;
 }
 
 // Message shown on an alert screen (Select pages through a line's

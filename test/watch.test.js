@@ -413,6 +413,25 @@ test("parts out of order or repeated never mix two checks' messages", async () =
 	watch.restore();
 });
 
+test("a message too long for the screen goes on more pages, cut at spaces", async () => {
+	const watch = await started();
+	// Wide glyphs: 40 words of "WWWW" don't fit one page (see watch-sim's measure).
+	const text = Array.from({ length: 40 }, (_v, i) => `WWWW${i}`).join(" ");
+	watch.deliver({ ...ALERT2, alertCount: 1, alertText: text });
+	assert.ok(watch.screen().includes("Info trafic : 1"));
+	watch.press("down");
+	const banner = watch.screen()[0];
+	const total = Number(/1\/(\d+)$/.exec(banner)[1]);
+	assert.ok(total > 1);
+	const pages = [];
+	for (let i = 0; i < total; i++) {
+		pages.push(watch.screen()[2]);
+		watch.press("select");
+	}
+	assert.strictEqual(pages.join(" "), text);
+	watch.restore();
+});
+
 test("leaving the screen or new messages bring the alert back to its first page", async () => {
 	const watch = await onAlertScreen();
 	watch.press("select");
