@@ -219,6 +219,27 @@ test("alerts: a new message notifies and is pinned, an ended one gets an end pin
 	phone.restore();
 });
 
+test("alerts: turning the timeline on pins the disruptions already known, once", () => {
+	const storage = new Map([["stroycommuteConfig", JSON.stringify({ ...ALERT_CONFIG, timelineEnabled: false })]]);
+	const phone = loadPhone({ storage });
+	const line = "STIF:Line::C01743:";
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	answerAlerts(phone, { [line]: gmAnswer(line, ["a"]) });
+	assert.strictEqual(phone.pins.size, 0);
+	storage.set("stroycommuteConfig", JSON.stringify(ALERT_CONFIG));
+	phone.advance(11 * 60000);
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	answerAlerts(phone, { [line]: gmAnswer(line, ["a"]) });
+	assert.ok(phone.pins.has("alert-a"));
+	// Not pinned again at every check.
+	phone.pins.clear();
+	phone.advance(11 * 60000);
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	answerAlerts(phone, { [line]: gmAnswer(line, ["a"]) });
+	assert.strictEqual(phone.pins.size, 0);
+	phone.restore();
+});
+
 test("alerts: nothing notified outside the schedule, answers reused for 10 minutes", () => {
 	const config = { ...ALERT_CONFIG, alertSchedule: { days: [], startTime: "07:00", endTime: "09:00" } };
 	const phone = loadPhone({ storage: new Map([["stroycommuteConfig", JSON.stringify(config)]]) });

@@ -2452,6 +2452,7 @@ const GENERAL_MESSAGE_URL =
 	"https://prim.iledefrance-mobilites.fr/marketplace/general-message";
 const ALERTS_KEY = "stroycommuteAlerts"; // lineRef -> { at, messages }
 const ALERTS_SEEN_KEY = "stroycommuteAlertSeen"; // message id -> first seen
+const ALERTS_PINNED_KEY = "stroycommuteAlertPinned"; // message id -> true
 const ALERT_CACHE_MS = 10 * 60000;
 // Notifications per check, at most (several new messages at once usually
 // mean a network-wide event, and the watch screens list them all anyway).
@@ -2580,12 +2581,20 @@ function afterAlertRefresh(config, lines, cache, previous) {
 		}
 	}
 	if (config.timelineEnabled) {
-		const toPin = seen === null ? current.map((m) => m.id) : diff.added;
-		for (const id of toPin) {
-			Pebble.insertTimelinePin(
-				alerts.alertPin(byId[id], lineOf[id].lineName, diff.seen[id], texts)
-			);
+		// Pins every current message not pinned yet -- not just the new ones:
+		// messages first seen while the timeline was off still get theirs once
+		// it's turned on.
+		const pinned = readJson(ALERTS_PINNED_KEY, {});
+		const nowPinned = {};
+		for (const id of Object.keys(byId)) {
+			if (!pinned[id]) {
+				Pebble.insertTimelinePin(
+					alerts.alertPin(byId[id], lineOf[id].lineName, diff.seen[id], texts)
+				);
+			}
+			nowPinned[id] = true;
 		}
+		localStorage.setItem(ALERTS_PINNED_KEY, JSON.stringify(nowPinned));
 		for (const id of diff.ended) {
 			Pebble.deleteTimelinePin(alerts.pinId(id));
 			const last = previous[id];
