@@ -129,8 +129,14 @@ test("config requests made while the phone is unreachable don't use up the retri
 	watch.connect();
 	const requests = () => watch.sent.filter((m) => m.itemType === "configResendRequest").length;
 	assert.strictEqual(requests(), 1);
-	watch.advance(1600); // the config doesn't come: asked again
+	watch.advance(1499); // the full wait, counted from the request sent
+	assert.strictEqual(requests(), 1);
+	watch.advance(1); // the config doesn't come: asked again
 	assert.strictEqual(requests(), 2);
+	watch.advance(1500);
+	assert.strictEqual(requests(), 3); // the third and last
+	watch.advance(5000);
+	assert.strictEqual(requests(), 3);
 	watch.restore();
 });
 

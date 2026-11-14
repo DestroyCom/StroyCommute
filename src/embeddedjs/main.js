@@ -441,6 +441,12 @@ function flushOutbox() {
 		const result = writeMessage(new Map([["itemType", "configResendRequest"]]));
 		if (result === "busy") return;
 		configRequestPending = false;
+		// The wait for the config (and the next try) starts once the request
+		// is out, however long the phone took to become reachable.
+		if (!configLoaded) {
+			clearConfigResendTimeout();
+			scheduleConfigResendTimeout();
+		}
 	}
 	if (alertRequestPending) {
 		if (writeMessage(new Map([["itemType", "refreshAlerts"]])) === "busy")
@@ -489,14 +495,14 @@ function requestConfigResend() {
 		return;
 	}
 	// The last request is still waiting for the phone: no new one, and no
-	// retry spent until one is actually sent.
+	// retry spent until one is actually sent. The timer for the next try is
+	// armed by flushOutbox once this one is written.
 	if (!configRequestPending) {
 		configResendCount++;
 		note(`resend ${configResendCount}`);
 		configRequestPending = true;
 	}
 	flushOutbox();
-	scheduleConfigResendTimeout();
 }
 
 /**
