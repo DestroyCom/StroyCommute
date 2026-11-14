@@ -122,6 +122,12 @@ files under `/mnt/d`.
   `src/plugin/plugin.js` is generated (`npm run sync:plugin`, checked in
   CI by `check:config`) from `src/plugin/main.js` and `src/pkjs/trips.js`:
   never edit it by hand.
+  The Pebble app's plugin runtime differs from the emulator's (confirmed on
+  a real phone, 2026-11-14): `setTimeout` throws ("setTimeout is not
+  available to plugins") although the emulator provides it, and a plugin
+  session is torn down as soon as it responds, so `console.log` calls in
+  callbacks that run after the response never show in `pebble logs`.
+  `test/plugin.test.js` fakes `setTimeout` as throwing, like the phone.
 - All date/time conversion (UTC → minutes remaining) happens in pkjs,
   since that's where the raw SIRI response now arrives (also matches
   `docs/idfm-api-reference.md`'s original note that this conversion

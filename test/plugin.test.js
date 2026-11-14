@@ -20,7 +20,11 @@ function loadPlugin({ storage = new Map(), now = Date.UTC(2026, 10, 13, 8), answ
 			setItem: (k, v) => storage.set(k, String(v)),
 			removeItem: (k) => storage.delete(k),
 		},
-		setTimeout: () => 0, // the fetch timeout never fires in these tests
+		// As in the Pebble app (seen on a real phone): every PRIM call failed
+		// on this, so the plugin never served a time.
+		setTimeout: () => {
+			throw new Error("setTimeout is not available to plugins");
+		},
 		fetch: async (url, options) => {
 			urls.push({ url, apiKey: options.headers.apiKey });
 			const body = answer ? answer(url) : siriAnswer(now, [3, 9]);
@@ -67,7 +71,9 @@ test("serves one instance per tracked trip with the next departures", async () =
 	assert.strictEqual(data.instances[0].instanceId, `${STOP.stopRef}|${STOP.lineRef}|`);
 	assert.deepStrictEqual(p.name.shortText, { text: "4" });
 	assert.strictEqual(p.name.longText.text, "4 — Bagneux");
-	assert.deepStrictEqual(p.next.numericValue, { value: 3, unit: "min", min: 0 });
+	// No lone `min`: the phone app drops a numericValue whose min comes
+	// without max ("min and max come as a pair", seen in `pebble logs`).
+	assert.deepStrictEqual(p.next.numericValue, { value: 3, unit: "min" });
 	assert.strictEqual(p.next.shortText.text, "3 min");
 	assert.strictEqual(p.following.shortText.text, "9 min");
 	assert.strictEqual(typeof p.next_time.timestamp.value, "number");
@@ -86,6 +92,30 @@ test("reads within 2 minutes reuse the cached times, counting down", async () =>
 	plugin.advance(60000);
 	await plugin.read();
 	assert.strictEqual(plugin.urls.length, 2);
+	plugin.restore();
+});
+
+// Seen on a real phone: a watchface reads the source on every property
+// change, and with no usable answer (failure, or no departure at night)
+// nothing was cached, so every read called PRIM again: 50 calls in 4 min.
+test("a failed or empty answer still waits 2 minutes before calling again", async () => {
+	for (const answer of [() => null, (url) => siriAnswer(Date.UTC(2026, 10, 13, 8), [])]) {
+		const plugin = loadPlugin({ storage: withConfig(), answer });
+		await plugin.read();
+		plugin.advance(2000);
+		await plugin.read();
+		assert.strictEqual(plugin.urls.length, 1);
+		plugin.advance(2 * 60000);
+		await plugin.read();
+		assert.strictEqual(plugin.urls.length, 2);
+		plugin.restore();
+	}
+});
+
+test("reads arriving together make one call per trip", async () => {
+	const plugin = loadPlugin({ storage: withConfig() });
+	await Promise.all([plugin.read(), plugin.read(), plugin.read()]);
+	assert.strictEqual(plugin.urls.length, 1);
 	plugin.restore();
 });
 
@@ -124,6 +154,22 @@ test("serves nothing when disabled in the settings or without a key", async () =
 		assert.strictEqual(plugin.urls.length, 0);
 		plugin.restore();
 	}
+});
+
+// Seen on a real phone at night: PRIM answered 0 visits for a metro stop
+// and the plugin kept serving the last (departed) train.
+test("an answer without departures drops the last times", async () => {
+	let empty = false;
+	const plugin = loadPlugin({
+		storage: withConfig(),
+		answer: () => siriAnswer(Date.UTC(2026, 10, 13, 8), empty ? [] : [6]),
+	});
+	await plugin.read();
+	empty = true;
+	plugin.advance(3 * 60000);
+	const { data } = await plugin.read();
+	assert.deepStrictEqual(data.instances, []);
+	plugin.restore();
 });
 
 test("a failed fetch keeps the last times, an unknown source is refused", async () => {

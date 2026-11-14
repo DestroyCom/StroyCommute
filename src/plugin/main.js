@@ -19,6 +19,10 @@
 
 const CONFIG_KEY = "stroycommuteConfig";
 const CACHE_KEY = "stroycommutePluginCache";
+// trip key -> when the plugin last called PRIM for it, answer or not: a
+// watchface reads the source on every change, and without this a failed or
+// empty answer (no departure at night) was fetched again on each read.
+const TRIED_KEY = "stroycommutePluginTried";
 const QUOTA_KEY = "stroycommuteQuota";
 const GUARD_KEY = "stroycommuteCallGuard";
 const STOP_MONITORING_URL =
@@ -27,7 +31,6 @@ const MIN_FETCH_MS = 2 * 60000;
 const MAX_TRIPS = 3;
 const PRIM_DAILY_QUOTA = 1000;
 const QUOTA_RESERVE = 300;
-const FETCH_TIMEOUT_MS = 10000;
 // Times older than this aren't served at all.
 const MAX_AGE_MS = 30 * 60000;
 
@@ -70,23 +73,33 @@ function countCall(now) {
 
 /**
  * @returns {Promise<?object[]>} The stop's MonitoredStopVisit list, null on
- *   any failure (network, quota, bad key or stop, timeout).
+ *   any failure (network, quota, bad key or stop).
  */
 async function fetchVisits(apiKey, ref, lineRef, now) {
 	const url = `${STOP_MONITORING_URL}?MonitoringRef=${encodeURIComponent(ref)}&LineRef=${encodeURIComponent(lineRef)}`;
 	countCall(now);
-	const timeout = new Promise((resolve) => {
-		setTimeout(() => resolve(null), FETCH_TIMEOUT_MS);
-	});
-	const request = fetch(url, { headers: { apiKey: apiKey } })
-		.then((response) => (response.ok ? response.json() : null))
+	// One line per PRIM call, to check the plugin's pace in `pebble logs`.
+	console.log(`plugin: stop-monitoring ${ref} ${lineRef}`);
+	// No timeout of our own: the Pebble app refuses setTimeout to plugins
+	// (it threw on every call), and its plugin host already gives up on a
+	// request that doesn't answer.
+	return fetch(url, { headers: { apiKey: apiKey } })
+		.then((response) => {
+			if (!response.ok)
+				console.log(`plugin: HTTP ${response.status} for ${ref}`);
+			return response.ok ? response.json() : null;
+		})
 		.then((body) => {
 			if (!body) return null;
 			const delivery = body.Siri.ServiceDelivery.StopMonitoringDelivery[0];
-			return delivery.MonitoredStopVisit || [];
+			const visits = delivery.MonitoredStopVisit || [];
+			console.log(`plugin: ${visits.length} visits for ${ref}`);
+			return visits;
 		})
-		.catch(() => null);
-	return Promise.race([request, timeout]);
+		.catch((error) => {
+			console.log(`plugin: failed for ${ref}: ${error}`);
+			return null;
+		});
 }
 
 /**
@@ -113,11 +126,14 @@ function summarize(visits, now) {
 }
 
 /**
- * @returns {Promise<?object>} Fresh times for `stop`, or the cached ones
- *   when fetching isn't allowed right now or fails.
+ * @returns {Promise<?object>} Fresh times for `stop`, null when PRIM
+ *   answers without a usable departure, or the cached ones when fetching
+ *   isn't allowed right now or fails.
  */
 async function tripTimes(config, stop, cached, now) {
 	if (cached && now - cached.at < MIN_FETCH_MS) return cached;
+	const tried = readJson(TRIED_KEY, {});
+	if (now - (tried[tripKey(stop)] || 0) < MIN_FETCH_MS) return cached;
 	if (quotaLeft(now) < QUOTA_RESERVE) return cached;
 	const refs = stop.destStopRef
 		? [stop.stopRef, stop.destStopRef]
@@ -131,6 +147,10 @@ async function tripTimes(config, stop, cached, now) {
 	);
 	localStorage.setItem(GUARD_KEY, JSON.stringify(guard.state));
 	if (!guard.allowed) return cached;
+	// Written before the calls, so reads arriving meanwhile don't call too.
+	const triedNow = readJson(TRIED_KEY, {});
+	triedNow[tripKey(stop)] = now;
+	localStorage.setItem(TRIED_KEY, JSON.stringify(triedNow));
 	const results = await Promise.all(
 		refs.map((ref) => fetchVisits(config.apiKey, ref, stop.lineRef, now))
 	);
@@ -138,7 +158,15 @@ async function tripTimes(config, stop, cached, now) {
 	const kept = stop.destStopRef
 		? trips.filterVisitsServingStop(results[0], results[1])
 		: results[0];
-	return summarize(kept, now) || cached;
+	const times = summarize(kept, now);
+	if (!times) {
+		console.log(
+			`plugin: no usable departure for ${tripKey(stop)} (${kept.length} kept)`
+		);
+	}
+	// PRIM answered: no departure means none, not "keep the last train"
+	// (which has left). Only a failed call keeps the cached times.
+	return times;
 }
 
 /** @returns {{shortText: {text: string}}} */
@@ -170,7 +198,7 @@ function propertiesOf(stop, times, texts, now) {
 		properties.next = {
 			shortText: { text: texts.atStop },
 			longText: { text: texts.atStop },
-			numericValue: { value: 0, unit: "min", min: 0 },
+			numericValue: { value: 0, unit: "min" },
 		};
 	} else if (typeof times.time === "number") {
 		const minutes = minutesUntil(times.time, now);
@@ -180,7 +208,7 @@ function propertiesOf(stop, times, texts, now) {
 			longText: {
 				text: times.destination ? `${label} — ${times.destination}` : label,
 			},
-			numericValue: { value: minutes, unit: "min", min: 0 },
+			numericValue: { value: minutes, unit: "min" },
 		};
 		properties.next_time = {
 			timestamp: { value: Math.floor(times.time / 1000) },
@@ -216,7 +244,10 @@ Pebble.registerSourceHandler(async (request, respond) => {
 	const results = await Promise.all(
 		stops.map((stop) =>
 			tripTimes(config, stop, cache[tripKey(stop)] || null, now).catch(
-				() => cache[tripKey(stop)] || null
+				(error) => {
+					console.log(`plugin: ${tripKey(stop)} failed: ${error}`);
+					return cache[tripKey(stop)] || null;
+				}
 			)
 		)
 	);
