@@ -35,6 +35,7 @@ version texte à coller dans le store.
 
 ### Corrections
 
+- Corriger la clé API dans les réglages remet bien les horaires à jour, même si une demande était en cours avec l'ancienne clé.
 - Un train à quai s'affiche bien avant un train dont l'heure de départ vient de passer.
 - Un envoi bloqué entre la montre et le téléphone ne peut plus figer les rafraîchissements.
 - Une requête PRIM qui ne répond pas affiche une erreur réseau au bout de 10 secondes au lieu de rester sans réponse.
