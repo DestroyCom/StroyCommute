@@ -288,3 +288,14 @@ test("alerts: the watch gets every message whole, ordered, with the line's colou
 	assert.ok(line4);
 	phone.restore();
 });
+
+test("the screens setting reaches the watch", () => {
+	for (const [screens, expected] of [["alerts", 2], ["stops", 1], [undefined, 0], ["nonsense", 0]]) {
+		const config = { ...CONFIG, screens: screens };
+		const phone = loadPhone({ storage: new Map([["stroycommuteConfig", JSON.stringify(config)]]) });
+		phone.fire("ready", {});
+		phone.advance(1000);
+		assert.strictEqual(phone.sent.find((m) => m.itemType === "configMeta").screens, expected);
+		phone.restore();
+	}
+});

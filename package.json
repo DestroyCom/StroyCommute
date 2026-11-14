@@ -72,7 +72,8 @@
 			"vibrateMinutes",
 			"alertCount",
 			"alertText",
-			"autoOpen"
+			"autoOpen",
+			"screens"
 		],
 		"resources": {
 			"media": [

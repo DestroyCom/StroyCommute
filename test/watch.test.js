@@ -397,3 +397,39 @@ test("Select still refreshes a stop", async () => {
 	assert.strictEqual(watch.sent.filter((m) => m.itemType === "refreshStop").length, before + 1);
 	watch.restore();
 });
+
+test("stops only: no alert screen, the stop still says Info trafic", async () => {
+	const watch = await loadWatch();
+	watch.connect();
+	for (const item of configItems([STOP], "fr", 0, { screens: 1 })) watch.deliver(item);
+	watch.deliver(ALERT);
+	assert.ok(watch.screen().includes("Info trafic : 1"));
+	watch.press("down");
+	assert.strictEqual(watch.screen()[0], "Réglages");
+	watch.press("down");
+	assert.strictEqual(watch.screen()[0], "4 — Bagneux");
+	watch.restore();
+});
+
+test("alerts only: every watched line has a screen, no stop screen", async () => {
+	const watch = await loadWatch();
+	watch.connect();
+	for (const item of configItems([STOP], "fr", 0, { screens: 2 })) watch.deliver(item);
+	assert.deepStrictEqual(watch.screen().slice(0, 2), ["4", "..."]);
+	watch.deliver({ itemType: "alertUpdate", lineRef: STOP.lineRef, lineName: "4", alertCount: 0 });
+	assert.deepStrictEqual(watch.screen().slice(0, 2), ["4", "Pas de perturbation"]);
+	watch.press("down");
+	assert.strictEqual(watch.screen()[0], "Réglages");
+	watch.press("down");
+	assert.strictEqual(watch.screen()[0], "4");
+	watch.restore();
+});
+
+test("a config without the screens field shows stops and alerts", async () => {
+	const watch = await started();
+	watch.deliver(ALERT);
+	assert.strictEqual(watch.screen()[0], "4 — Bagneux");
+	watch.press("down");
+	assert.strictEqual(watch.screen()[0], "4");
+	watch.restore();
+});

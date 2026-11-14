@@ -300,6 +300,7 @@ const ALL_MESSAGE_KEYS = [
 	"alertCount",
 	"alertText",
 	"autoOpen",
+	"screens",
 ];
 const MESSAGE_KEY_CODES = new Map(
 	ALL_MESSAGE_KEYS.map((key, index) => [key, 10000 + index])
@@ -504,6 +505,7 @@ function handleConfigItem(item) {
 		};
 		if (STRINGS[item.language]) language = item.language;
 		autoOpen = !!item.autoOpen;
+		screensMode = typeof item.screens === "number" ? item.screens : 0;
 		vibrateMinutes =
 			typeof item.vibrateMinutes === "number" ? item.vibrateMinutes : 0;
 		pendingConfigCount = item.itemCount;
@@ -1008,21 +1010,25 @@ function startRefreshTimer() {
  */
 function buildItemList() {
 	const list = [];
-	for (const stop of stops) list.push(Object.assign({ type: "stop" }, stop));
-	// Lines added in the alerts section always have a screen; the tracked
-	// stops' lines only while they have messages.
-	const shownLines = new Set();
-	for (const line of alertLines) {
-		shownLines.add(line.lineRef);
-		list.push({
-			type: "alert",
-			lineRef: line.lineRef,
-			lineName: line.lineName,
-		});
+	if (screensMode !== SCREENS_ALERTS) {
+		for (const stop of stops) list.push(Object.assign({ type: "stop" }, stop));
 	}
-	for (const [lineRef, info] of lineAlerts) {
-		if (info.count > 0 && !shownLines.has(lineRef)) {
-			list.push({ type: "alert", lineRef: lineRef, lineName: info.lineName });
+	if (screensMode !== SCREENS_STOPS) {
+		// Lines added in the alerts section always have a screen; the tracked
+		// stops' lines only while they have messages, or always when alert
+		// screens are all the watch shows.
+		const shownLines = new Set();
+		const addLine = (lineRef, lineName) => {
+			if (shownLines.has(lineRef)) return;
+			shownLines.add(lineRef);
+			list.push({ type: "alert", lineRef: lineRef, lineName: lineName });
+		};
+		for (const line of alertLines) addLine(line.lineRef, line.lineName);
+		if (screensMode === SCREENS_ALERTS) {
+			for (const stop of stops) addLine(stop.lineRef, stop.lineName);
+		}
+		for (const [lineRef, info] of lineAlerts) {
+			if (info.count > 0) addLine(lineRef, info.lineName);
 		}
 	}
 	// Settings last, once loaded, and only next to something to show:
@@ -1033,6 +1039,13 @@ function buildItemList() {
 
 let items = [];
 let selectedIndex = 0;
+
+// Which screens Up/Down cycles through (config page "Écrans sur la
+// montre"): both, stops only, or alerts only. Settings stay last in all.
+const SCREENS_BOTH = 0;
+const SCREENS_STOPS = 1;
+const SCREENS_ALERTS = 2;
+let screensMode = SCREENS_BOTH;
 
 // Error states shown in place of the times: [STRINGS key, shown in red].
 const STATE_MESSAGES = {

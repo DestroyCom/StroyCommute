@@ -113,6 +113,12 @@ const CONFIG_HTML = `<!DOCTYPE html>
       <input type="text" id="lineSearchInput" data-i18n-placeholder="lineSearchPlaceholder" placeholder="Rechercher une ligne (ex : 4, RER A)" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceSearch('line')" disabled>
       <div id="lineSearchResults" class="searchResults"></div>
       <div class="searchStatus" data-i18n="linesHint">Les lignes de tes arrêts suivis sont surveillées automatiquement. Ajoute ici d'autres lignes à surveiller.</div>
+      <label class="optionRow" for="screens" data-i18n="screensLabel">Écrans sur la montre</label>
+      <select id="screens">
+        <option value="both" data-i18n="screensBoth">Arrêts et alertes</option>
+        <option value="stops" data-i18n="screensStops">Arrêts seulement</option>
+        <option value="alerts" data-i18n="screensAlerts">Alertes seulement</option>
+      </select>
     </fieldset>
 
     <fieldset>
@@ -226,6 +232,10 @@ const CONFIG_HTML = `<!DOCTYPE html>
       moveDown: "Descendre",
       linesLegend: "Lignes suivies (alertes trafic)",
       linesHint: "Les lignes de tes arrêts suivis sont surveillées automatiquement. Ajoute ici d'autres lignes à surveiller.",
+      screensLabel: "Écrans sur la montre",
+      screensBoth: "Arrêts et alertes",
+      screensStops: "Arrêts seulement",
+      screensAlerts: "Alertes seulement",
       notifyLabel: "Me notifier sur la montre d'une nouvelle perturbation pendant ce créneau",
       autoOpenLabel: "Ouvrir l'app au début du créneau",
       alertsHint: "Les alertes sont vérifiées quand l'app est ouverte, toutes les 10 minutes. L'ouverture automatique permet de les vérifier (et d'avoir tes horaires) dès le début du créneau.",
@@ -310,6 +320,10 @@ const CONFIG_HTML = `<!DOCTYPE html>
       moveDown: "Move down",
       linesLegend: "Followed lines (traffic alerts)",
       linesHint: "The lines of your tracked stops are watched automatically. Add other lines to watch here.",
+      screensLabel: "Watch screens",
+      screensBoth: "Stops and alerts",
+      screensStops: "Stops only",
+      screensAlerts: "Alerts only",
       notifyLabel: "Notify me on the watch of a new disruption during this window",
       autoOpenLabel: "Open the app when the window starts",
       alertsHint: "Alerts are checked while the app is open, every 10 minutes. Opening it automatically checks them (and shows your times) as the window starts.",
@@ -1419,6 +1433,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
       pluginEnabled: document.getElementById("pluginEnabled").checked,
       notifyAlerts: document.getElementById("notifyAlerts").checked,
       autoOpen: document.getElementById("autoOpen").checked,
+      screens: document.getElementById("screens").value,
       language: document.getElementById("language").value
     };
     var json = JSON.stringify(config);
@@ -1460,6 +1475,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
     document.getElementById("pluginEnabled").checked = initial.pluginEnabled !== false;
     document.getElementById("notifyAlerts").checked = initial.notifyAlerts !== false;
     document.getElementById("autoOpen").checked = !!initial.autoOpen;
+    document.getElementById("screens").value = initial.screens === "stops" || initial.screens === "alerts" ? initial.screens : "both";
     var guard = initial.callGuard || {};
     if (typeof guard.maxCalls === "number") document.getElementById("guardMaxCalls").value = guard.maxCalls;
     if (typeof guard.windowMinutes === "number") document.getElementById("guardWindow").value = guard.windowMinutes;
@@ -1790,6 +1806,9 @@ function daysToBitmask(days) {
 // Mirrors ALERTS_ENABLED in CONFIG_HTML -- flip both together.
 const ALERTS_ENABLED = true;
 
+// The config page's "screens" setting, as configMeta sends it.
+const SCREENS_CODES = { both: 0, stops: 1, alerts: 2 };
+
 /**
  * Sends the full config (schedule + tracked stops/lines) to the watch as a
  * sequence of AppMessage items, one per stop/line plus a leading configMeta.
@@ -1817,6 +1836,8 @@ function sendConfigToWatch(rawConfig) {
 			vibrateMinutes: config.vibrateMinutes,
 			// Open the app when the schedule starts (watch wakeup).
 			autoOpen: config.autoOpen ? 1 : 0,
+			// Watch screens: 0 stops and alerts, 1 stops only, 2 alerts only.
+			screens: SCREENS_CODES[config.screens],
 		},
 	];
 
@@ -2000,6 +2021,10 @@ function normalizeConfig(config) {
 		),
 		notifyAlerts: config.notifyAlerts !== false,
 		autoOpen: !!config.autoOpen,
+		screens:
+			config.screens === "stops" || config.screens === "alerts"
+				? config.screens
+				: "both",
 		alertSchedule: {
 			days: Array.isArray(schedule.days) ? schedule.days : [],
 			startTime: schedule.startTime || "07:00",
