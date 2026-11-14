@@ -41,6 +41,24 @@ function callTimeMs(call) {
 }
 
 /**
+ * @param {object} call - A SIRI MonitoredCall.
+ * @returns {number|null} Epoch ms of the departure, else of the arrival,
+ *   or null. Only for telling whether a train has left: displayed times
+ *   and the sort stay on callTimeMs (a train can wait at the platform
+ *   between its arrival and its departure).
+ */
+function callDepartureMs(call) {
+	const field =
+		call.ExpectedDepartureTime ||
+		call.AimedDepartureTime ||
+		call.ExpectedArrivalTime ||
+		call.AimedArrivalTime;
+	if (!field) return null;
+	const ms = new Date(field).getTime();
+	return Number.isNaN(ms) ? null : ms;
+}
+
+/**
  * @param {object} callA - The train's MonitoredCall at A.
  * @param {object} callB - The same train's MonitoredCall at B.
  * @returns {boolean} True when the train reaches B after A: by stop
@@ -129,7 +147,7 @@ const AT_STOP_LEFT_MS = 60000;
  *   an A->B trip).
  * @param {number} now - Epoch ms.
  * @returns {{journey: object, atStop: boolean, cancelled: boolean,
- *   minutes: number, timeMs: ?number}[]} The departures with a usable
+ *   minutes: number, timeMs: ?number, departMs: ?number}[]} The departures with a usable
  *   time, running trains first (a cancelled one can't hide the real next
  *   departure), then at-stop first, then by time. `minutes` is floored at 0:
  *   the expected time can be slightly past before VehicleAtStop flips.
@@ -151,6 +169,7 @@ function rankDepartures(visits, now) {
 					cancelled: call.DepartureStatus === "cancelled",
 					minutes: minutes === null ? null : Math.max(0, minutes),
 					timeMs: timeMs,
+					departMs: callDepartureMs(call),
 				};
 			})
 			.filter((d) => d.atStop || d.minutes !== null)
@@ -159,7 +178,11 @@ function rankDepartures(visits, now) {
 			// it, it has left and the following one is the next departure.
 			.filter(
 				(d) =>
-					!(d.atStop && d.timeMs !== null && d.timeMs < now - AT_STOP_LEFT_MS)
+					!(
+						d.atStop &&
+						d.departMs !== null &&
+						d.departMs < now - AT_STOP_LEFT_MS
+					)
 			)
 			// Stable sort: running trains first, then trains at the platform, then
 			// by exact time (not the rounded minutes, so close trains keep their
@@ -324,6 +347,7 @@ function staleExtra(saved, now) {
 
 module.exports = {
 	callTimeMs: callTimeMs,
+	callDepartureMs: callDepartureMs,
 	journeyDestinationName: journeyDestinationName,
 	rankDepartures: rankDepartures,
 	staleExtra: staleExtra,

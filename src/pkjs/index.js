@@ -2143,29 +2143,40 @@ function normalizeConfig(config) {
  * needing `count` calls, persisting its state.
  * @param {object|null} config
  * @param {number} count
- * @returns {{allowed: boolean, minutesLeft: number}}
+ * @returns {{allowed: boolean, minutesLeft: number, reservedAt: number}}
+ *   `reservedAt` is the timestamp the allowed calls were recorded under,
+ *   to hand back to refundGuardCall.
  */
 function checkCallGuard(config, count) {
+	const now = Date.now();
 	const decision = decideCallGuard(
 		readJson("stroycommuteCallGuard", null),
 		config ? config.callGuard : undefined,
-		Date.now(),
+		now,
 		count
 	);
 	localStorage.setItem("stroycommuteCallGuard", JSON.stringify(decision.state));
-	return decision;
+	return Object.assign({}, decision, { reservedAt: now });
 }
 
 /**
  * Gives back to the call guard one call that never reached PRIM (no
  * connection: no HTTP answer at all), so being offline can't start a
  * pause. A timed-out call may have reached PRIM and stays counted.
+ * Only that call's own reservation goes: when it's no longer there (the
+ * guard was reset or a pause started since), nothing is given back, so
+ * another request's reservation is never taken.
+ * @param {?number} reservedAt - checkCallGuard's `reservedAt` for the
+ *   call; null/undefined when it wasn't counted (nothing to give back).
  */
-function refundGuardCall() {
+function refundGuardCall(reservedAt) {
+	if (typeof reservedAt !== "number") return;
 	const state = readJson("stroycommuteCallGuard", null);
-	if (!state || !Array.isArray(state.calls) || state.calls.length === 0) return;
-	const calls = state.calls.slice().sort((a, b) => a - b);
-	calls.pop();
+	if (!state || !Array.isArray(state.calls)) return;
+	const index = state.calls.indexOf(reservedAt);
+	if (index === -1) return;
+	const calls = state.calls.slice();
+	calls.splice(index, 1);
 	localStorage.setItem(
 		"stroycommuteCallGuard",
 		JSON.stringify(Object.assign({}, state, { calls: calls }))
@@ -2212,11 +2223,19 @@ function cachedVisits(ref, lineRef) {
 		: null;
 }
 
-/** @returns {boolean} True when getStopVisits would make a PRIM call. */
-function needsFetch(ref, lineRef) {
+/** @returns {string} Key for inFlight: shared only under the same API key. */
+function flightKeyOf(apiKey, ref, lineRef) {
+	return `${visitsKey(ref, lineRef)}|${apiKey}`;
+}
+
+/**
+ * @returns {boolean} True when getStopVisits(apiKey, ref, lineRef) would
+ *   make a PRIM call (a request in flight under another API key doesn't
+ *   answer for this one).
+ */
+function needsFetch(apiKey, ref, lineRef) {
 	if (cachedVisits(ref, lineRef)) return false;
-	const prefix = `${visitsKey(ref, lineRef)}|`;
-	return !Array.from(inFlight.keys()).some((k) => k.indexOf(prefix) === 0);
+	return !inFlight.has(flightKeyOf(apiKey, ref, lineRef));
 }
 
 /**
@@ -2224,9 +2243,11 @@ function needsFetch(ref, lineRef) {
  * @param {string} apiKey
  * @param {string} ref
  * @param {string} lineRef
+ * @param {?number} reservedAt - The call guard reservation a new PRIM call
+ *   would use (see refundGuardCall).
  * @param {function(string, object[]=): void} done
  */
-function getStopVisits(apiKey, ref, lineRef, done) {
+function getStopVisits(apiKey, ref, lineRef, reservedAt, done) {
 	const key = visitsKey(ref, lineRef);
 	const cached = cachedVisits(ref, lineRef);
 	if (cached) {
@@ -2235,14 +2256,14 @@ function getStopVisits(apiKey, ref, lineRef, done) {
 	}
 	// Shared only under the same API key: a request made before the key
 	// was changed must not answer for the new one.
-	const flightKey = `${key}|${apiKey}`;
+	const flightKey = flightKeyOf(apiKey, ref, lineRef);
 	const waiting = inFlight.get(flightKey);
 	if (waiting) {
 		waiting.push(done);
 		return;
 	}
 	inFlight.set(flightKey, [done]);
-	fetchStopVisits(apiKey, ref, lineRef, (state, visits) => {
+	fetchStopVisits(apiKey, ref, lineRef, reservedAt, (state, visits) => {
 		const callbacks = inFlight.get(flightKey) || [];
 		inFlight.delete(flightKey);
 		if (state === "ok") responseCache.set(key, { at: Date.now(), visits });
@@ -2263,9 +2284,11 @@ function getStopVisits(apiKey, ref, lineRef, done) {
  * @param {string} apiKey
  * @param {string} stopRef
  * @param {string} lineRef
+ * @param {?number} reservedAt - Its call guard reservation (refunded when
+ *   PRIM is never reached).
  * @param {function(string, object[]=): void} done
  */
-function fetchStopVisits(apiKey, stopRef, lineRef, done) {
+function fetchStopVisits(apiKey, stopRef, lineRef, reservedAt, done) {
 	const url =
 		STOP_MONITORING_URL +
 		"?MonitoringRef=" +
@@ -2302,7 +2325,7 @@ function fetchStopVisits(apiKey, stopRef, lineRef, done) {
 		const remaining = remainingQuota(xhr);
 		if (remaining !== null) lastQuotaRemaining = remaining;
 		if (xhr.status === 0) {
-			refundGuardCall(); // no connection: PRIM never saw it
+			refundGuardCall(reservedAt); // no connection: PRIM never saw it
 			return finish("network");
 		}
 		if (xhr.status === 429) return finish("quotaExceeded");
@@ -2324,7 +2347,7 @@ function fetchStopVisits(apiKey, stopRef, lineRef, done) {
 		finish("ok", visits);
 	});
 	xhr.onerror = guarded("stop-monitoring.onerror", () => {
-		if (!finished) refundGuardCall(); // no connection: PRIM never saw it
+		if (!finished) refundGuardCall(reservedAt); // no connection: PRIM never saw it
 		finish("network");
 	});
 	lastQuotaRemaining = recordPrimRequestAndGetQuotaRemaining();
@@ -2512,40 +2535,48 @@ function handleRefreshStop(request) {
 	}
 
 	const config = storedConfig();
+	const apiKey = config ? config.apiKey : "";
 	// Only the calls that will really reach PRIM count against the guard.
-	const calls = refs.filter((ref) => needsFetch(ref, request.lineRef)).length;
+	const calls = refs.filter((ref) =>
+		needsFetch(apiKey, ref, request.lineRef)
+	).length;
 	const guard =
 		calls > 0
 			? checkCallGuard(config, calls)
-			: { allowed: true, minutesLeft: 0 };
+			: { allowed: true, minutesLeft: 0, reservedAt: null };
 	if (!guard.allowed) {
 		reply("rateLimited", { minutes: guard.minutesLeft });
 		return;
 	}
 
-	const apiKey = config ? config.apiKey : "";
 	const results = [];
 	let pending = refs.length;
 	refs.forEach((ref, i) => {
-		getStopVisits(apiKey, ref, request.lineRef, (state, visits) => {
-			results[i] = { state: state, visits: visits };
-			pending -= 1;
-			if (pending > 0) return;
-			const failure = worstState(results.map((r) => r.state));
-			if (failure !== "ok") {
-				reply(failure);
-				return;
+		getStopVisits(
+			apiKey,
+			ref,
+			request.lineRef,
+			guard.reservedAt,
+			(state, visits) => {
+				results[i] = { state: state, visits: visits };
+				pending -= 1;
+				if (pending > 0) return;
+				const failure = worstState(results.map((r) => r.state));
+				if (failure !== "ok") {
+					reply(failure);
+					return;
+				}
+				try {
+					const kept = destStopRef
+						? filterVisitsServingStop(results[0].visits, results[1].visits)
+						: results[0].visits;
+					replyWithDepartures(kept, request.lineName, reply);
+				} catch (error) {
+					console.log("departureUpdate build error: " + error);
+					reply("network");
+				}
 			}
-			try {
-				const kept = destStopRef
-					? filterVisitsServingStop(results[0].visits, results[1].visits)
-					: results[0].visits;
-				replyWithDepartures(kept, request.lineName, reply);
-			} catch (error) {
-				console.log("departureUpdate build error: " + error);
-				reply("network");
-			}
-		});
+		);
 	});
 }
 
@@ -2630,9 +2661,11 @@ const ALERT_TEXTS = {
  * Fetches one line's messages; `done(messages)` gets null on any failure.
  * @param {string} apiKey
  * @param {string} lineRef
+ * @param {?number} reservedAt - Its call guard reservation (refunded when
+ *   PRIM is never reached).
  * @param {function(?object[]): void} done
  */
-function fetchGeneralMessages(apiKey, lineRef, done) {
+function fetchGeneralMessages(apiKey, lineRef, reservedAt, done) {
 	const xhr = new XMLHttpRequest();
 	let finished = false;
 	const finish = (messages) => {
@@ -2666,7 +2699,7 @@ function fetchGeneralMessages(apiKey, lineRef, done) {
 		finish(alerts.parseGeneralMessages(JSON.parse(xhr.responseText), lineRef));
 	});
 	xhr.onerror = guarded("general-message.onerror", () => {
-		if (!finished) refundGuardCall(); // no connection: PRIM never saw it
+		if (!finished) refundGuardCall(reservedAt); // no connection: PRIM never saw it
 		finish(null);
 	});
 	xhr.send();
@@ -2758,7 +2791,9 @@ function checkAlerts(over) {
 	for (const line of due.slice(toFetch.length)) {
 		failed[line.lineRef] = "rateLimited";
 	}
-	if (toFetch.length === 0 || !checkCallGuard(config, toFetch.length).allowed) {
+	const guard =
+		toFetch.length > 0 ? checkCallGuard(config, toFetch.length) : null;
+	if (!guard || !guard.allowed) {
 		for (const line of toFetch) failed[line.lineRef] = "rateLimited";
 		finish();
 		return;
@@ -2771,15 +2806,20 @@ function checkAlerts(over) {
 	localStorage.setItem(ALERTS_TRIED_KEY, JSON.stringify(nextTried));
 	let pending = toFetch.length;
 	for (const line of toFetch) {
-		fetchGeneralMessages(config.apiKey, line.lineRef, (messages) => {
-			if (messages) {
-				cache[line.lineRef] = { at: Date.now(), messages: messages };
-			} else {
-				failed[line.lineRef] = "network";
+		fetchGeneralMessages(
+			config.apiKey,
+			line.lineRef,
+			guard.reservedAt,
+			(messages) => {
+				if (messages) {
+					cache[line.lineRef] = { at: Date.now(), messages: messages };
+				} else {
+					failed[line.lineRef] = "network";
+				}
+				pending -= 1;
+				if (pending === 0) finish();
 			}
-			pending -= 1;
-			if (pending === 0) finish();
-		});
+		);
 	}
 }
 

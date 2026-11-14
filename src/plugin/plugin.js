@@ -46,6 +46,24 @@ const trips = (() => {
 	}
 
 	/**
+	 * @param {object} call - A SIRI MonitoredCall.
+	 * @returns {number|null} Epoch ms of the departure, else of the arrival,
+	 *   or null. Only for telling whether a train has left: displayed times
+	 *   and the sort stay on callTimeMs (a train can wait at the platform
+	 *   between its arrival and its departure).
+	 */
+	function callDepartureMs(call) {
+		const field =
+			call.ExpectedDepartureTime ||
+			call.AimedDepartureTime ||
+			call.ExpectedArrivalTime ||
+			call.AimedArrivalTime;
+		if (!field) return null;
+		const ms = new Date(field).getTime();
+		return Number.isNaN(ms) ? null : ms;
+	}
+
+	/**
 	 * @param {object} callA - The train's MonitoredCall at A.
 	 * @param {object} callB - The same train's MonitoredCall at B.
 	 * @returns {boolean} True when the train reaches B after A: by stop
@@ -134,7 +152,7 @@ const trips = (() => {
 	 *   an A->B trip).
 	 * @param {number} now - Epoch ms.
 	 * @returns {{journey: object, atStop: boolean, cancelled: boolean,
-	 *   minutes: number, timeMs: ?number}[]} The departures with a usable
+	 *   minutes: number, timeMs: ?number, departMs: ?number}[]} The departures with a usable
 	 *   time, running trains first (a cancelled one can't hide the real next
 	 *   departure), then at-stop first, then by time. `minutes` is floored at 0:
 	 *   the expected time can be slightly past before VehicleAtStop flips.
@@ -156,6 +174,7 @@ const trips = (() => {
 						cancelled: call.DepartureStatus === "cancelled",
 						minutes: minutes === null ? null : Math.max(0, minutes),
 						timeMs: timeMs,
+						departMs: callDepartureMs(call),
 					};
 				})
 				.filter((d) => d.atStop || d.minutes !== null)
@@ -164,7 +183,11 @@ const trips = (() => {
 				// it, it has left and the following one is the next departure.
 				.filter(
 					(d) =>
-						!(d.atStop && d.timeMs !== null && d.timeMs < now - AT_STOP_LEFT_MS)
+						!(
+							d.atStop &&
+							d.departMs !== null &&
+							d.departMs < now - AT_STOP_LEFT_MS
+						)
 				)
 				// Stable sort: running trains first, then trains at the platform, then
 				// by exact time (not the rounded minutes, so close trains keep their
@@ -329,6 +352,7 @@ const trips = (() => {
 
 	module.exports = {
 		callTimeMs: callTimeMs,
+		callDepartureMs: callDepartureMs,
 		journeyDestinationName: journeyDestinationName,
 		rankDepartures: rankDepartures,
 		staleExtra: staleExtra,
@@ -462,8 +486,8 @@ function summarize(visits, now) {
 			(d) =>
 				!d.cancelled &&
 				(d.atStop ||
-					typeof d.timeMs !== "number" ||
-					d.timeMs >= now - LEFT_AFTER_MS)
+					typeof d.departMs !== "number" ||
+					d.departMs >= now - LEFT_AFTER_MS)
 		);
 	if (departures.length === 0) return null;
 	const first = departures[0];
@@ -474,6 +498,10 @@ function summarize(visits, now) {
 		cancelled: first.cancelled,
 		time: first.timeMs,
 		time2: second ? second.timeMs : null,
+		// Departure times, for telling when a train has left (time/time2,
+		// the arrivals, stay what is shown).
+		depart: first.departMs,
+		depart2: second ? second.departMs : null,
 		destination: trips.journeyDestinationName(first.journey),
 		mission: trips.journeyMission(first.journey),
 	};
@@ -597,15 +625,22 @@ const AT_STOP_FOR_MS = 3 * 60000;
  */
 function usableTimes(times, now) {
 	if (!times || times.cancelled) return null;
+	// Times cached by an older version have no departures: the arrivals
+	// stand in for them.
+	const depart = typeof times.depart === "number" ? times.depart : times.time;
+	const depart2 =
+		typeof times.depart2 === "number" ? times.depart2 : times.time2;
 	const left = times.atStop
 		? now - times.at > AT_STOP_FOR_MS
-		: typeof times.time === "number" && times.time < now - LEFT_AFTER_MS;
+		: typeof depart === "number" && depart < now - LEFT_AFTER_MS;
 	if (!left) return times;
-	if (typeof times.time2 === "number" && times.time2 >= now - LEFT_AFTER_MS) {
+	if (typeof depart2 === "number" && depart2 >= now - LEFT_AFTER_MS) {
 		return Object.assign({}, times, {
 			atStop: false,
 			time: times.time2,
 			time2: null,
+			depart: depart2,
+			depart2: null,
 			destination: "",
 			mission: "",
 		});

@@ -123,3 +123,23 @@ test("rankDepartures: a train still at the platform over a minute past its time 
 	// An at-platform train without any time is kept.
 	assert.strictEqual(rankDepartures([visit(0, { ExpectedDepartureTime: undefined, VehicleAtStop: true })], now).length, 1);
 });
+
+test("rankDepartures: a train waiting at the platform past its arrival, before its departure, is kept", () => {
+	const { rankDepartures } = require("../src/pkjs/trips");
+	const now = Date.UTC(2026, 10, 14, 8);
+	const at = (offsetMin) => new Date(now + offsetMin * 60000).toISOString();
+	const ranked = rankDepartures(
+		[
+			{
+				MonitoredVehicleJourney: {
+					MonitoredCall: { VehicleAtStop: true, ExpectedArrivalTime: at(-3), ExpectedDepartureTime: at(2) },
+				},
+			},
+		],
+		now
+	);
+	assert.strictEqual(ranked.length, 1);
+	// Shown and sorted by its arrival, expired by its departure.
+	assert.strictEqual(ranked[0].timeMs, now - 3 * 60000);
+	assert.strictEqual(ranked[0].departMs, now + 2 * 60000);
+});

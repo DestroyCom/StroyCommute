@@ -98,6 +98,29 @@ test("calls that never reached PRIM (offline) don't count against the call guard
 	phone.restore();
 });
 
+test("a call that never reached PRIM gives back its own reservation, not a later one", () => {
+	const phone = withConfig();
+	const guard = () => JSON.parse(phone.storage.get("stroycommuteCallGuard")).calls;
+	phone.fromWatch(REFRESH);
+	const first = phone.requests.at(-1);
+	const t0 = phone.now;
+	phone.advance(5000);
+	phone.fromWatch({ ...REFRESH, stopRef: "STIF:StopPoint:Q:2:" });
+	const t1 = t0 + 5000;
+	assert.deepStrictEqual(guard().slice().sort(), [t0, t1]);
+	first.onerror(); // the earlier request was offline
+	assert.deepStrictEqual(guard(), [t1]);
+	// Guard reset meanwhile: the second request's late failure takes nothing
+	// from the calls reserved since.
+	const second = phone.requests.at(-1);
+	phone.storage.set("stroycommuteCallGuard", JSON.stringify({ calls: [], pausedUntil: 0 }));
+	phone.advance(5000);
+	phone.fromWatch({ ...REFRESH, stopRef: "STIF:StopPoint:Q:3:" });
+	second.respond(0, "");
+	assert.deepStrictEqual(guard(), [t1 + 5000]);
+	phone.restore();
+});
+
 test("the settings' reset lifts the quota pause and has everything asked again", () => {
 	const phone = withConfig();
 	phone.storage.set("stroycommuteCallGuard", JSON.stringify({ calls: [], pausedUntil: phone.now + 10 * 60000 }));
@@ -155,6 +178,25 @@ test("a request in flight under the old API key doesn't answer for the new one",
 	phone.fire("webviewclosed", { response: encodeURIComponent(JSON.stringify({ ...CONFIG, apiKey: "new-key" })) });
 	ask();
 	assert.strictEqual(calls().length, 2);
+	phone.restore();
+});
+
+test("a request in flight under the old API key doesn't spare the new one's call from the guard", () => {
+	const config = { ...CONFIG, callGuard: { maxCalls: 2, windowMinutes: 10, pauseMinutes: 15 } };
+	const phone = loadPhone({ storage: new Map([["stroycommuteConfig", JSON.stringify(config)]]) });
+	const calls = () => phone.requests.filter((r) => /stop-monitoring/.test(r.url));
+	const save = (apiKey) =>
+		phone.fire("webviewclosed", { response: encodeURIComponent(JSON.stringify({ ...config, apiKey })) });
+	save("key"); // settles any traffic info check the start made
+	phone.storage.set("stroycommuteCallGuard", JSON.stringify({ calls: [phone.now], pausedUntil: 0 }));
+	save("new-key");
+	phone.storage.set("stroycommuteCallGuard", JSON.stringify({ calls: [phone.now], pausedUntil: 0 }));
+	phone.fromWatch(REFRESH); // the guard's last call
+	assert.strictEqual(calls().length, 1);
+	save("newer-key");
+	phone.fromWatch(REFRESH); // in flight under "new-key" only: counted, refused
+	assert.strictEqual(calls().length, 1);
+	assert.strictEqual(updates(phone).at(-1).state, "rateLimited");
 	phone.restore();
 });
 

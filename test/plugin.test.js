@@ -269,3 +269,22 @@ test("a train that has left is not served: the following one takes its place, el
 	assert.deepStrictEqual((await plugin.read()).data.instances, []);
 	plugin.restore();
 });
+
+test("a train past its arrival but not yet departed is still served", async () => {
+	const now = Date.UTC(2026, 10, 13, 8);
+	const key = `${STOP.stopRef}|${STOP.lineRef}|`;
+	const storage = withConfig();
+	storage.set(
+		"stroycommutePluginCache",
+		JSON.stringify({
+			[key]: { at: now - 60000, atStop: false, time: now - 3 * 60000, depart: now + 60000, time2: now + 8 * 60000, depart2: now + 9 * 60000 },
+		})
+	);
+	const plugin = loadPlugin({ storage, now, answer: () => null });
+	const p = (await plugin.read()).data.instances[0].properties;
+	assert.strictEqual(p.next.shortText.text, "0 min");
+	assert.ok(p.following);
+	plugin.advance(3 * 60000); // departed 2 min ago: the following one takes its place
+	assert.strictEqual((await plugin.read()).data.instances[0].properties.next.shortText.text, "5 min");
+	plugin.restore();
+});

@@ -117,8 +117,8 @@ function summarize(visits, now) {
 			(d) =>
 				!d.cancelled &&
 				(d.atStop ||
-					typeof d.timeMs !== "number" ||
-					d.timeMs >= now - LEFT_AFTER_MS)
+					typeof d.departMs !== "number" ||
+					d.departMs >= now - LEFT_AFTER_MS)
 		);
 	if (departures.length === 0) return null;
 	const first = departures[0];
@@ -129,6 +129,10 @@ function summarize(visits, now) {
 		cancelled: first.cancelled,
 		time: first.timeMs,
 		time2: second ? second.timeMs : null,
+		// Departure times, for telling when a train has left (time/time2,
+		// the arrivals, stay what is shown).
+		depart: first.departMs,
+		depart2: second ? second.departMs : null,
 		destination: trips.journeyDestinationName(first.journey),
 		mission: trips.journeyMission(first.journey),
 	};
@@ -252,15 +256,22 @@ const AT_STOP_FOR_MS = 3 * 60000;
  */
 function usableTimes(times, now) {
 	if (!times || times.cancelled) return null;
+	// Times cached by an older version have no departures: the arrivals
+	// stand in for them.
+	const depart = typeof times.depart === "number" ? times.depart : times.time;
+	const depart2 =
+		typeof times.depart2 === "number" ? times.depart2 : times.time2;
 	const left = times.atStop
 		? now - times.at > AT_STOP_FOR_MS
-		: typeof times.time === "number" && times.time < now - LEFT_AFTER_MS;
+		: typeof depart === "number" && depart < now - LEFT_AFTER_MS;
 	if (!left) return times;
-	if (typeof times.time2 === "number" && times.time2 >= now - LEFT_AFTER_MS) {
+	if (typeof depart2 === "number" && depart2 >= now - LEFT_AFTER_MS) {
 		return Object.assign({}, times, {
 			atStop: false,
 			time: times.time2,
 			time2: null,
+			depart: depart2,
+			depart2: null,
 			destination: "",
 			mission: "",
 		});
