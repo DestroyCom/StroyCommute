@@ -120,6 +120,10 @@ function journeyDestinationName(journey) {
 	return "";
 }
 
+// A train still reported at the platform this long (ms) after its departure
+// time counts as left (see rankDepartures).
+const AT_STOP_LEFT_MS = 60000;
+
 /**
  * @param {object[]} visits - MonitoredStopVisit list (already filtered for
  *   an A->B trip).
@@ -150,6 +154,13 @@ function rankDepartures(visits, now) {
 				};
 			})
 			.filter((d) => d.atStop || d.minutes !== null)
+			// PRIM keeps a train "at the platform" about 2 min past its
+			// departure time (seen at Gare du Nord, RER B): over a minute past
+			// it, it has left and the following one is the next departure.
+			.filter(
+				(d) =>
+					!(d.atStop && d.timeMs !== null && d.timeMs < now - AT_STOP_LEFT_MS)
+			)
 			// Stable sort: running trains first, then trains at the platform, then
 			// by exact time (not the rounded minutes, so close trains keep their
 			// order). An at-stop train without a time stays among the at-stop ones.
