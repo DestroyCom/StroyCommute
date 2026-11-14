@@ -542,6 +542,14 @@ function onConfigReady() {
 	// A new config may have fixed the API key or the stop: forget every
 	// known state, permanent errors included (see PERMANENT_ERROR_STATES).
 	departures.clear();
+	// Traffic info of lines the new config no longer watches would
+	// otherwise keep their screen until the app is closed.
+	for (const lineRef of Array.from(lineAlerts.keys())) {
+		const watched =
+			stops.some((stop) => stop.lineRef === lineRef) ||
+			alertLines.some((line) => line.lineRef === lineRef);
+		if (!watched) lineAlerts.delete(lineRef);
+	}
 	items = buildItemList();
 	if (selectedIndex >= items.length) selectedIndex = 0;
 	startRefreshTimer();

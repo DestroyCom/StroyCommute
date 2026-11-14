@@ -274,6 +274,14 @@ const ALERT = {
 	alertText: "Jusqu'au 19 décembre inclus, l'arrêt n'est pas desservi à Saint-Michel (travaux de rénovation)",
 };
 
+test("a line no longer watched after a new config loses its traffic info screen", async () => {
+	const watch = await started();
+	watch.deliver(ALERT);
+	for (const item of configItems([])) watch.deliver(item);
+	assert.deepStrictEqual(watch.screen(), ["Aucun arrêt configuré", "Ajoute-en dans l'app Pebble"]);
+	watch.restore();
+});
+
 test("a line with traffic info gets its own screen, and its stops say so", async () => {
 	const watch = await started();
 	watch.deliver(ALERT);
