@@ -131,28 +131,35 @@ function journeyDestinationName(journey) {
  *   the expected time can be slightly past before VehicleAtStop flips.
  */
 function rankDepartures(visits, now) {
-	return visits
-		.map((visit) => visit && visit.MonitoredVehicleJourney)
-		.filter((journey) => journey && journey.MonitoredCall)
-		.map((journey) => {
-			const call = journey.MonitoredCall;
-			const atStop = call.VehicleAtStop === true;
-			const timeMs = callTimeMs(call);
-			const minutes =
-				timeMs === null ? null : Math.round((timeMs - now) / MINUTE_MS);
-			return {
-				journey: journey,
-				atStop: atStop,
-				cancelled: call.DepartureStatus === "cancelled",
-				minutes: minutes === null ? null : Math.max(0, minutes),
-				timeMs: timeMs,
-				rank: atStop ? -1 : minutes,
-			};
-		})
-		.filter((d) => d.atStop || d.minutes !== null)
-		.sort(
-			(a, b) => Number(a.cancelled) - Number(b.cancelled) || a.rank - b.rank
-		);
+	return (
+		visits
+			.map((visit) => visit && visit.MonitoredVehicleJourney)
+			.filter((journey) => journey && journey.MonitoredCall)
+			.map((journey) => {
+				const call = journey.MonitoredCall;
+				const atStop = call.VehicleAtStop === true;
+				const timeMs = callTimeMs(call);
+				const minutes =
+					timeMs === null ? null : Math.round((timeMs - now) / MINUTE_MS);
+				return {
+					journey: journey,
+					atStop: atStop,
+					cancelled: call.DepartureStatus === "cancelled",
+					minutes: minutes === null ? null : Math.max(0, minutes),
+					timeMs: timeMs,
+				};
+			})
+			.filter((d) => d.atStop || d.minutes !== null)
+			// Stable sort: running trains first, then trains at the platform, then
+			// by exact time (not the rounded minutes, so close trains keep their
+			// order). An at-stop train without a time stays among the at-stop ones.
+			.sort(
+				(a, b) =>
+					Number(a.cancelled) - Number(b.cancelled) ||
+					Number(b.atStop) - Number(a.atStop) ||
+					(a.atStop ? 0 : a.timeMs - b.timeMs)
+			)
+	);
 }
 
 const DEFAULT_CALL_GUARD = {

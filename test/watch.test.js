@@ -433,3 +433,46 @@ test("a config without the screens field shows stops and alerts", async () => {
 	assert.strictEqual(watch.screen()[0], "4");
 	watch.restore();
 });
+
+test("a train that took over shows its own mission, not the first one's destination", async () => {
+	const watch = await started();
+	watch.deliver({ ...timed(watch, 1, 6), mission: "AAAA", mission2: "BBBB", destination: "Robinson" });
+	watch.advance(3 * 60000);
+	watch.emit("minutechange");
+	const screen = watch.screen();
+	assert.ok(screen.includes("BBBB"));
+	assert.ok(!screen.some((line) => /Robinson|AAAA/.test(line)));
+	watch.restore();
+});
+
+test("once every known train has left, the screen says so instead of 0 min", async () => {
+	const watch = await started();
+	watch.deliver(timed(watch, 1, 3));
+	watch.deliver({ ...OK, state: "network" }); // later refreshes keep failing
+	watch.advance(6 * 60000);
+	watch.emit("minutechange");
+	const screen = watch.screen();
+	assert.ok(screen.includes("Plus de départ connu"));
+	assert.ok(!screen.some((line) => /^0 min/.test(line)));
+	watch.restore();
+});
+
+test("traffic info for a line no longer watched is ignored", async () => {
+	const watch = await started();
+	watch.deliver({ ...ALERT, lineRef: "STIF:Line::C09999:", lineName: "X" });
+	watch.press("down");
+	assert.strictEqual(watch.screen()[0], "Réglages");
+	watch.restore();
+});
+
+test("traffic info that couldn't be fetched isn't shown as no disruption", async () => {
+	const watch = await loadWatch();
+	watch.connect();
+	const items = configItems([]);
+	items[0].itemCount = 2;
+	items.push({ itemIndex: 1, itemCount: 2, itemType: "configLine", lineRef: "STIF:Line::C01743:", lineName: "RER B" });
+	for (const item of items) watch.deliver(item);
+	watch.deliver({ itemType: "alertUpdate", lineRef: "STIF:Line::C01743:", lineName: "RER B", alertCount: 0, staleReason: "network" });
+	assert.deepStrictEqual(watch.screen().slice(0, 2), ["RER B", "Info trafic indisponible"]);
+	watch.restore();
+});

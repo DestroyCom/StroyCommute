@@ -136,28 +136,35 @@ const trips = (() => {
 	 *   the expected time can be slightly past before VehicleAtStop flips.
 	 */
 	function rankDepartures(visits, now) {
-		return visits
-			.map((visit) => visit && visit.MonitoredVehicleJourney)
-			.filter((journey) => journey && journey.MonitoredCall)
-			.map((journey) => {
-				const call = journey.MonitoredCall;
-				const atStop = call.VehicleAtStop === true;
-				const timeMs = callTimeMs(call);
-				const minutes =
-					timeMs === null ? null : Math.round((timeMs - now) / MINUTE_MS);
-				return {
-					journey: journey,
-					atStop: atStop,
-					cancelled: call.DepartureStatus === "cancelled",
-					minutes: minutes === null ? null : Math.max(0, minutes),
-					timeMs: timeMs,
-					rank: atStop ? -1 : minutes,
-				};
-			})
-			.filter((d) => d.atStop || d.minutes !== null)
-			.sort(
-				(a, b) => Number(a.cancelled) - Number(b.cancelled) || a.rank - b.rank
-			);
+		return (
+			visits
+				.map((visit) => visit && visit.MonitoredVehicleJourney)
+				.filter((journey) => journey && journey.MonitoredCall)
+				.map((journey) => {
+					const call = journey.MonitoredCall;
+					const atStop = call.VehicleAtStop === true;
+					const timeMs = callTimeMs(call);
+					const minutes =
+						timeMs === null ? null : Math.round((timeMs - now) / MINUTE_MS);
+					return {
+						journey: journey,
+						atStop: atStop,
+						cancelled: call.DepartureStatus === "cancelled",
+						minutes: minutes === null ? null : Math.max(0, minutes),
+						timeMs: timeMs,
+					};
+				})
+				.filter((d) => d.atStop || d.minutes !== null)
+				// Stable sort: running trains first, then trains at the platform, then
+				// by exact time (not the rounded minutes, so close trains keep their
+				// order). An at-stop train without a time stays among the at-stop ones.
+				.sort(
+					(a, b) =>
+						Number(a.cancelled) - Number(b.cancelled) ||
+						Number(b.atStop) - Number(a.atStop) ||
+						(a.atStop ? 0 : a.timeMs - b.timeMs)
+				)
+		);
 	}
 
 	const DEFAULT_CALL_GUARD = {
@@ -417,11 +424,13 @@ async function fetchVisits(apiKey, ref, lineRef, now) {
  *   departure has a usable time.
  */
 function summarize(visits, now) {
-	const departures = trips.rankDepartures(visits, now);
+	// A cancelled train is never served as a departure.
+	const departures = trips
+		.rankDepartures(visits, now)
+		.filter((d) => !d.cancelled);
 	if (departures.length === 0) return null;
 	const first = departures[0];
-	const second =
-		departures.length > 1 && !departures[1].cancelled ? departures[1] : null;
+	const second = departures.length > 1 ? departures[1] : null;
 	return {
 		at: now,
 		atStop: first.atStop,
@@ -535,6 +544,30 @@ function propertiesOf(stop, times, texts, now) {
 	return properties;
 }
 
+// A departure this long past (ms) counts as left.
+const LEFT_AFTER_MS = 60000;
+
+/**
+ * @param {?object} times - A trip's stored times.
+ * @param {number} now
+ * @returns {?object} The same without trains that have left: a following
+ *   train takes the first one's place (its destination and mission aren't
+ *   known, so they go), null when no known train is still to come.
+ */
+function usableTimes(times, now) {
+	if (!times || times.atStop || typeof times.time !== "number") return times;
+	if (times.time >= now - LEFT_AFTER_MS) return times;
+	if (typeof times.time2 === "number" && times.time2 >= now - LEFT_AFTER_MS) {
+		return Object.assign({}, times, {
+			time: times.time2,
+			time2: null,
+			destination: "",
+			mission: "",
+		});
+	}
+	return null;
+}
+
 Pebble.registerSourceHandler(async (request, respond) => {
 	if (request.category !== "transit" || request.item !== "departure") {
 		respond.error("INVALID_REQUEST");
@@ -565,9 +598,11 @@ Pebble.registerSourceHandler(async (request, respond) => {
 		const times = results[i];
 		if (!times || now - times.at > MAX_AGE_MS) return;
 		nextCache[tripKey(stop)] = times;
+		const usable = usableTimes(times, now);
+		if (!usable) return;
 		instances.push({
 			instanceId: tripKey(stop),
-			properties: propertiesOf(stop, times, texts, now),
+			properties: propertiesOf(stop, usable, texts, now),
 		});
 	});
 	localStorage.setItem(CACHE_KEY, JSON.stringify(nextCache));

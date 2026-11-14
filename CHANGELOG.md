@@ -13,7 +13,7 @@ version texte à coller dans le store.
 
 - Réglage « Écrans sur la montre » : arrêts et alertes, arrêts seulement ou alertes seulement.
 - Alertes trafic : les perturbations des lignes de tes arrêts (et des lignes que tu ajoutes) s'affichent sur la montre, avec un écran par ligne perturbée et un rappel sur l'écran de l'arrêt. Chaque perturbation est lisible en entier, la plus urgente en premier.
-- Notification sur la montre quand une nouvelle perturbation apparaît pendant ton créneau de trajet (réglable), et ajout des perturbations et de leur fin à la timeline (option), y compris celles déjà en cours quand tu l'actives ; les réglages rappellent d'autoriser la timeline pour l'app dans l'app Pebble.
+- Notification sur la montre quand une nouvelle perturbation apparaît pendant ton créneau de trajet (réglable), tant que l'app est ouverte (l'option d'ouverture automatique au début du créneau s'en charge), et ajout des perturbations et de leur fin à la timeline (option), y compris celles déjà en cours quand tu l'actives ; les réglages rappellent d'autoriser la timeline pour l'app dans l'app Pebble.
 - Option pour ouvrir l'app automatiquement au début de ton créneau de trajet.
 - Tes prochains départs peuvent s'afficher sur les cadrans compatibles avec les plugins Pebble (aperçu à activer dans l'app Pebble), avec une consommation de quota limitée. Réglage « Cadrans » pour le désactiver.
 - Compatible avec la Pebble Round 2 : mise en page adaptée à l'écran rond.
@@ -35,6 +35,7 @@ version texte à coller dans le store.
 
 ### Corrections
 
+- Un train à quai s'affiche bien avant un train dont l'heure de départ vient de passer.
 - Un envoi bloqué entre la montre et le téléphone ne peut plus figer les rafraîchissements.
 - Une requête PRIM qui ne répond pas affiche une erreur réseau au bout de 10 secondes au lieu de rester sans réponse.
 - Les horaires reçus par la montre sont renvoyés si elle était occupée, au lieu d'être perdus jusqu'au rafraîchissement suivant.

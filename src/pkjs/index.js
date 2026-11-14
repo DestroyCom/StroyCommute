@@ -2551,28 +2551,45 @@ function refreshAlerts() {
 			previous[message.id] = { text: message.text, lineName: line.lineName };
 		}
 	}
-	let pending = lines.length;
-	const lineDone = () => {
-		pending -= 1;
-		if (pending === 0) afterAlertRefresh(config, lines, cache, previous);
-	};
 	const now = Date.now();
-	for (const line of lines) {
+	const toFetch = lines.filter((line) => {
 		const entry = cache[line.lineRef];
-		if (entry && now - entry.at < ALERT_CACHE_MS) {
-			lineDone();
-			continue;
-		}
+		return !(entry && now - entry.at < ALERT_CACHE_MS);
+	});
+	// lineRef -> why its check failed ("rateLimited" or "network").
+	const failed = {};
+	const finish = () =>
+		afterAlertRefresh(config, lines, cache, previous, failed);
+	if (toFetch.length === 0) {
+		finish();
+		return;
+	}
+	// The user's call guard covers every PRIM call, traffic info included
+	// (the daily quotas stay per endpoint).
+	if (!checkCallGuard(config, toFetch.length).allowed) {
+		for (const line of toFetch) failed[line.lineRef] = "rateLimited";
+		finish();
+		return;
+	}
+	let pending = toFetch.length;
+	for (const line of toFetch) {
 		fetchGeneralMessages(config.apiKey, line.lineRef, (messages) => {
-			if (messages)
+			if (messages) {
 				cache[line.lineRef] = { at: Date.now(), messages: messages };
-			lineDone();
+			} else {
+				failed[line.lineRef] = "network";
+			}
+			pending -= 1;
+			if (pending === 0) finish();
 		});
 	}
 }
 
-/** Second half of refreshAlerts, once every line answered. */
-function afterAlertRefresh(config, lines, cache, previous) {
+/**
+ * Second half of refreshAlerts, once every line answered.
+ * @param {Object<string, string>} failed - lineRef -> why its check failed.
+ */
+function afterAlertRefresh(config, lines, cache, previous, failed) {
 	const now = Date.now();
 	const kept = {};
 	const current = [];
@@ -2588,46 +2605,54 @@ function afterAlertRefresh(config, lines, cache, previous) {
 	}
 	localStorage.setItem(ALERTS_KEY, JSON.stringify(kept));
 
-	const seen = readJson(ALERTS_SEEN_KEY, null);
-	const diff = alerts.diffMessages(seen || {}, current, now, seen === null);
-	localStorage.setItem(ALERTS_SEEN_KEY, JSON.stringify(diff.seen));
-	const texts = ALERT_TEXTS[resolveLanguage(config.language)] || ALERT_TEXTS.fr;
-	const byId = {};
-	for (const message of current) byId[message.id] = message;
+	// A line whose check failed with nothing cached can't tell what's new
+	// or over: no notification, pin or end pin from this check.
+	const incomplete = lines.some(
+		(line) => failed[line.lineRef] && !kept[line.lineRef]
+	);
+	if (!incomplete) {
+		const seen = readJson(ALERTS_SEEN_KEY, null);
+		const diff = alerts.diffMessages(seen || {}, current, now, seen === null);
+		localStorage.setItem(ALERTS_SEEN_KEY, JSON.stringify(diff.seen));
+		const texts =
+			ALERT_TEXTS[resolveLanguage(config.language)] || ALERT_TEXTS.fr;
+		const byId = {};
+		for (const message of current) byId[message.id] = message;
 
-	if (
-		config.notifyAlerts &&
-		alerts.inSchedule(config.alertSchedule, new Date(now))
-	) {
-		for (const id of diff.added.slice(0, MAX_NOTIFICATIONS)) {
-			Pebble.showSimpleNotificationOnPebble(
-				`${lineOf[id].lineName} : ${texts.trafficInfo}`,
-				byId[id].text
-			);
-		}
-	}
-	if (config.timelineEnabled) {
-		// Pins every current message not pinned yet -- not just the new ones:
-		// messages first seen while the timeline was off still get theirs once
-		// it's turned on.
-		const pinned = readJson(ALERTS_PINNED_KEY, {});
-		const nowPinned = {};
-		for (const id of Object.keys(byId)) {
-			if (!pinned[id]) {
-				Pebble.insertTimelinePin(
-					alerts.alertPin(byId[id], lineOf[id].lineName, diff.seen[id], texts)
+		if (
+			config.notifyAlerts &&
+			alerts.inSchedule(config.alertSchedule, new Date(now))
+		) {
+			for (const id of diff.added.slice(0, MAX_NOTIFICATIONS)) {
+				Pebble.showSimpleNotificationOnPebble(
+					`${lineOf[id].lineName} : ${texts.trafficInfo}`,
+					byId[id].text
 				);
 			}
-			nowPinned[id] = true;
 		}
-		localStorage.setItem(ALERTS_PINNED_KEY, JSON.stringify(nowPinned));
-		for (const id of diff.ended) {
-			Pebble.deleteTimelinePin(alerts.pinId(id));
-			const last = previous[id];
-			if (last) {
-				Pebble.insertTimelinePin(
-					alerts.endPin(id, last.lineName, last.text, now, texts)
-				);
+		if (config.timelineEnabled) {
+			// Pins every current message not pinned yet -- not just the new ones:
+			// messages first seen while the timeline was off still get theirs once
+			// it's turned on.
+			const pinned = readJson(ALERTS_PINNED_KEY, {});
+			const nowPinned = {};
+			for (const id of Object.keys(byId)) {
+				if (!pinned[id]) {
+					Pebble.insertTimelinePin(
+						alerts.alertPin(byId[id], lineOf[id].lineName, diff.seen[id], texts)
+					);
+				}
+				nowPinned[id] = true;
+			}
+			localStorage.setItem(ALERTS_PINNED_KEY, JSON.stringify(nowPinned));
+			for (const id of diff.ended) {
+				Pebble.deleteTimelinePin(alerts.pinId(id));
+				const last = previous[id];
+				if (last) {
+					Pebble.insertTimelinePin(
+						alerts.endPin(id, last.lineName, last.text, now, texts)
+					);
+				}
 			}
 		}
 	}
@@ -2644,6 +2669,8 @@ function afterAlertRefresh(config, lines, cache, previous) {
 				lineName: line.lineName,
 				alertCount: messages.length,
 			};
+			// The messages (if any) are from an earlier check.
+			if (failed[line.lineRef]) item.staleReason = failed[line.lineRef];
 			if (messages.length) item.alertText = alerts.alertTextFor(messages);
 			const stop = config.trackedStops.find((s) => s.lineRef === line.lineRef);
 			if (stop) {

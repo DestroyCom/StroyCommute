@@ -183,3 +183,37 @@ test("a failed fetch keeps the last times, an unknown source is refused", async 
 	assert.deepStrictEqual(await plugin.read({ category: "weather", item: "location" }), { error: "INVALID_REQUEST" });
 	plugin.restore();
 });
+
+test("a cancelled train is never served as a departure", async () => {
+	const now = Date.UTC(2026, 10, 13, 8);
+	const cancelledOnly = siriAnswer(now, [4]);
+	cancelledOnly.Siri.ServiceDelivery.StopMonitoringDelivery[0].MonitoredStopVisit[0].MonitoredVehicleJourney.MonitoredCall.DepartureStatus =
+		"cancelled";
+	const plugin = loadPlugin({ storage: withConfig(), now, answer: () => cancelledOnly });
+	const { data } = await plugin.read();
+	assert.deepStrictEqual(data.instances, []);
+	plugin.restore();
+
+	const mixed = siriAnswer(now, [2, 7]);
+	mixed.Siri.ServiceDelivery.StopMonitoringDelivery[0].MonitoredStopVisit[0].MonitoredVehicleJourney.MonitoredCall.DepartureStatus =
+		"cancelled";
+	const again = loadPlugin({ storage: withConfig(), now, answer: () => mixed });
+	const read = await again.read();
+	assert.strictEqual(read.data.instances[0].properties.next.shortText.text, "7 min");
+	again.restore();
+});
+
+test("a train that has left is not served: the following one takes its place, else nothing", async () => {
+	const plugin = loadPlugin({ storage: withConfig(), answer: (url) => (url ? siriAnswer(Date.UTC(2026, 10, 13, 8), [1, 6]) : null) });
+	await plugin.read();
+	plugin.advance(3 * 60000); // first left 2 min ago; within the fetch interval? no: refetch happens
+	// Make the refetch fail so the cached times are what is served.
+	globalThis.fetch = async () => ({ ok: false, json: async () => null });
+	const { data } = await plugin.read();
+	const p = data.instances[0].properties;
+	assert.strictEqual(p.next.shortText.text, "3 min");
+	assert.strictEqual(p.following, undefined);
+	plugin.advance(5 * 60000);
+	assert.deepStrictEqual((await plugin.read()).data.instances, []);
+	plugin.restore();
+});

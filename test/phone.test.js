@@ -299,3 +299,33 @@ test("the screens setting reaches the watch", () => {
 		phone.restore();
 	}
 });
+
+test("alerts: the call guard applies to traffic info too", () => {
+	const now = Date.UTC(2026, 10, 13, 8);
+	const config = { ...ALERT_CONFIG, callGuard: { maxCalls: 2, windowMinutes: 10, pauseMinutes: 15 } };
+	const storage = new Map([
+		["stroycommuteConfig", JSON.stringify(config)],
+		["stroycommuteCallGuard", JSON.stringify({ calls: [now - 1000, now - 2000], pausedUntil: 0 })],
+	]);
+	const phone = loadPhone({ storage });
+	phone.setNow(now);
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	assert.strictEqual(phone.requests.filter((r) => /general-message/.test(r.url)).length, 0);
+	phone.advance(2000);
+	const update = phone.sent.find((m) => m.itemType === "alertUpdate");
+	assert.strictEqual(update.staleReason, "rateLimited");
+	phone.restore();
+});
+
+test("alerts: a failed fetch is reported as such, not as no disruption", () => {
+	const phone = loadPhone({ storage: new Map([["stroycommuteConfig", JSON.stringify(ALERT_CONFIG)]]) });
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	for (const xhr of phone.requests.filter((r) => /general-message/.test(r.url))) xhr.respond(500, "{}");
+	phone.advance(2000);
+	const updates = phone.sent.filter((m) => m.itemType === "alertUpdate");
+	assert.ok(updates.length > 0);
+	assert.ok(updates.every((u) => u.staleReason === "network" && u.alertCount === 0));
+	assert.deepStrictEqual(phone.notifications, []);
+	assert.deepStrictEqual(phone.deletedPins, []);
+	phone.restore();
+});

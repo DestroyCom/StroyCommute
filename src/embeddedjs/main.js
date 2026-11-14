@@ -29,6 +29,8 @@ const STRINGS = {
 		quotaRemaining: "PRIM quota: {n} left",
 		quotaUnknown: "PRIM quota: unknown",
 		noAlert: "No disruption",
+		alertsUnavailable: "Traffic info unavailable",
+		noDeparture: "No known departure",
 		nextAlert: "Select: next",
 		trafficInfoCount: "Traffic info: {n}",
 		phoneDisconnected: "Phone disconnected",
@@ -54,6 +56,8 @@ const STRINGS = {
 		quotaRemaining: "Quota PRIM : {n} restant(s)",
 		quotaUnknown: "Quota PRIM : inconnu",
 		noAlert: "Pas de perturbation",
+		alertsUnavailable: "Info trafic indisponible",
+		noDeparture: "Plus de départ connu",
 		nextAlert: "Select : suivante",
 		trafficInfoCount: "Info trafic : {n}",
 		phoneDisconnected: "Téléphone déconnecté",
@@ -602,6 +606,8 @@ function startAlertTimer() {
 
 /** @param {object} item - A decoded alertUpdate. */
 function handleAlertUpdate(item) {
+	// A reply asked for before a config change can arrive after it.
+	if (!isWatchedLine(item.lineRef)) return;
 	const pages = item.alertText ? String(item.alertText).split("\n") : [];
 	const previous = lineAlerts.get(item.lineRef);
 	lineAlerts.set(item.lineRef, {
@@ -610,6 +616,8 @@ function handleAlertUpdate(item) {
 		pages: pages,
 		color: item.lineColor || "#888888",
 		textColor: item.lineTextColor || "#ffffff",
+		// Set when the last check failed: the messages (if any) are older.
+		stale: typeof item.staleReason === "string",
 	});
 	// New or ended messages on the line being read: back to its first page
 	// (the same messages sent again keep the page).
@@ -631,6 +639,14 @@ function handleAlertUpdate(item) {
 // Message shown on an alert screen (Select pages through a line's
 // messages); back to 0 when the screen changes.
 let alertPage = 0;
+
+/** @returns {boolean} True for a tracked stop's line or an alerts-section line. */
+function isWatchedLine(lineRef) {
+	return (
+		stops.some((stop) => stop.lineRef === lineRef) ||
+		alertLines.some((line) => line.lineRef === lineRef)
+	);
+}
 
 /** Rebuilds the item list, staying on the item that was on screen. */
 function rebuildItems() {
@@ -868,10 +884,13 @@ function minutesUntil(epochSeconds) {
 
 /**
  * @param {object} dep - A departures entry.
- * @returns {{minutes: number, departTime: ?number, minutes2: ?number,
- *   mission2: string, shifted: boolean}} The next departure's minutes,
- *   counted down from its time when known. Once the first has left (over a
- *   minute ago) the following one takes its place until the next reply.
+ * @returns {?{minutes: number, departTime: ?number, minutes2: ?number,
+ *   mission: string, mission2: string, destination: string,
+ *   shifted: boolean}} The next departure, its minutes counted down from its
+ *   time when known. Once the first has left (over a minute ago) the
+ *   following one takes its place until the next reply, with its own
+ *   mission and no destination (only the first one's is known). Null once
+ *   every known train has left.
  */
 function nextDepartures(dep) {
 	if (typeof dep.departTime !== "number") {
@@ -879,19 +898,24 @@ function nextDepartures(dep) {
 			minutes: dep.minutes,
 			departTime: null,
 			minutes2: typeof dep.minutes2 === "number" ? dep.minutes2 : null,
+			mission: dep.mission,
 			mission2: dep.mission2,
+			destination: dep.destination,
 			shifted: false,
 		};
 	}
 	const first = minutesUntil(dep.departTime);
 	const second =
 		typeof dep.departTime2 === "number" ? minutesUntil(dep.departTime2) : null;
-	if (first < -1 && second !== null) {
+	if (first < -1) {
+		if (second === null || second < -1) return null;
 		return {
 			minutes: Math.max(0, second),
 			departTime: dep.departTime2,
 			minutes2: null,
+			mission: dep.mission2,
 			mission2: "",
+			destination: "",
 			shifted: true,
 		};
 	}
@@ -899,7 +923,9 @@ function nextDepartures(dep) {
 		minutes: Math.max(0, first),
 		departTime: dep.departTime,
 		minutes2: second === null ? null : Math.max(0, second),
+		mission: dep.mission,
 		mission2: dep.mission2,
+		destination: dep.destination,
 		shifted: false,
 	};
 }
@@ -919,7 +945,7 @@ function checkApproach() {
 	const dep = departures.get(departureKey(item));
 	if (!dep || dep.state !== "ok" || dep.cancelled || dep.atStop) return;
 	const next = nextDepartures(dep);
-	if (next.departTime === null) return;
+	if (next === null || next.departTime === null) return;
 	if (next.minutes > vibrateMinutes) {
 		seenAboveThreshold.add(next.departTime);
 	} else if (
@@ -977,7 +1003,8 @@ function refreshAge(dep) {
 		return REFRESH_INTERVAL_MS;
 	}
 	if (dep.atStop || dep.cancelled) return REFRESH_INTERVAL_MS;
-	return nextDepartures(dep).minutes > FAR_DEPARTURE_MINUTES
+	const next = nextDepartures(dep);
+	return next !== null && next.minutes > FAR_DEPARTURE_MINUTES
 		? FAR_REFRESH_INTERVAL_MS
 		: REFRESH_INTERVAL_MS;
 }
@@ -1132,7 +1159,11 @@ function describeScreen() {
 			model.body = pages[Math.min(alertPage, pages.length - 1)];
 			model.footer = pages.length > 1 ? t("nextAlert") : "";
 		} else {
-			model.line = info ? t("noAlert") : "...";
+			model.line = !info
+				? "..."
+				: info.stale
+					? t("alertsUnavailable")
+					: t("noAlert");
 		}
 		return model;
 	}
@@ -1159,6 +1190,10 @@ function describeScreen() {
 		return model;
 	}
 	const next = nextDepartures(dep);
+	if (next === null) {
+		model.line = t("noDeparture"); // last times kept, all past
+		return model;
+	}
 	const status =
 		dep.cancelled && !next.shifted
 			? t("cancelled")
@@ -1168,9 +1203,9 @@ function describeScreen() {
 	model.status = pendingRefresh.has(departureKey(item))
 		? `${status} ${SPINNER_FRAMES[spinnerFrame]}`
 		: status;
-	model.line = dep.destination
-		? `${dep.mission ? `${dep.mission} - ` : ""}${t("towards")} ${dep.destination}`
-		: dep.mission;
+	model.line = next.destination
+		? `${next.mission ? `${next.mission} - ` : ""}${t("towards")} ${next.destination}`
+		: next.mission;
 	if (typeof next.minutes2 === "number") {
 		model.next = `${t("thenLabel")} ${next.minutes2} min${next.mission2 ? ` - ${next.mission2}` : ""}`;
 	}
