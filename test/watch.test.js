@@ -103,19 +103,24 @@ test("an error state with nothing to fall back on is shown in place of the times
 	watch.restore();
 });
 
-test("a reply asked under the previous config is dropped, and the new one is asked", async () => {
-	const watch = await started();
-	const asked = () => watch.sent.filter((m) => m.itemType === "refreshStop").length;
-	const before = asked();
-	// The user fixes the API key while the first request is in flight.
-	for (const item of configItems([STOP])) watch.deliver(item);
-	assert.strictEqual(asked(), before + 1);
-	watch.deliver({ ...OK, state: "invalidKey" }); // the old request's answer
-	watch.advance(1600);
-	assert.ok(!watch.screen().includes("Clé API invalide"));
-	watch.deliver(OK); // the new one's
-	assert.ok(watch.screen().includes("Vers Porte de Clignancourt"));
-	watch.restore();
+test("a reply asked under the previous config is dropped, in whatever order replies come", async () => {
+	for (const newFirst of [false, true]) {
+		const watch = await loadWatch();
+		watch.connect();
+		for (const item of configItems([STOP], "fr", 0, { configId: 1 })) watch.deliver(item);
+		const asked = () => watch.sent.filter((m) => m.itemType === "refreshStop").length;
+		const before = asked();
+		// The user fixes the API key while the first request is in flight.
+		for (const item of configItems([STOP], "fr", 0, { configId: 2 })) watch.deliver(item);
+		assert.strictEqual(asked(), before + 1);
+		const oldReply = { ...OK, state: "invalidKey", configId: 1 };
+		const newReply = { ...OK, configId: 2 };
+		for (const reply of newFirst ? [newReply, oldReply] : [oldReply, newReply]) watch.deliver(reply);
+		watch.advance(1600);
+		assert.ok(!watch.screen().includes("Clé API invalide"));
+		assert.ok(watch.screen().includes("Vers Porte de Clignancourt"));
+		watch.restore();
+	}
 });
 
 test("config requests made while the phone is unreachable don't use up the retries", async () => {

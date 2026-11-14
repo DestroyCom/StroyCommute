@@ -102,6 +102,10 @@ AppMessage now carries traffic in both directions:
   lines, and one stop+line can be tracked towards several arrivals).
   `configStop` carries optional `destStopRef`/`destStopName`. Optional
   string fields are omitted when empty, never sent as `""`.
+  Each reply also carries `configId`: the id of the config pkjs answered
+  under (bumped by every settings save, sent in `configMeta`). The watch
+  drops a reply whose `configId` isn't the one of the config it has
+  loaded, so an answer for an old API key can't stick.
 - **A→B trips**: for a trip with an arrival stop, pkjs fires two
   `stop-monitoring` requests in parallel (A and B) and keeps the A visits
   whose train (same `DatedVehicleJourneyRef`, train-number fallback) calls

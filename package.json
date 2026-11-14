@@ -74,7 +74,8 @@
 			"alertText",
 			"autoOpen",
 			"screens",
-			"alertPart"
+			"alertPart",
+			"configId"
 		],
 		"resources": {
 			"media": [

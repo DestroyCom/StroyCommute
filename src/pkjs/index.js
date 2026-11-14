@@ -1716,6 +1716,7 @@ function sendStoredConfigToWatch() {
 				scheduleEndMinutes: 0,
 				timelineEnabled: 0,
 				language: resolveLanguage("auto"),
+				configId: configId,
 			},
 		],
 		0
@@ -1782,6 +1783,7 @@ function saveConfig(config) {
 	localStorage.setItem("stroycommuteConfig", JSON.stringify(config));
 	pruneLastGood(config.trackedStops);
 	responseCache.clear(); // the API key may have changed
+	configId += 1; // replies to earlier requests are now stale
 	sendConfigToWatch(config);
 }
 
@@ -1816,6 +1818,12 @@ const SCREENS_CODES = { both: 0, stops: 1, alerts: 2 };
  * @param {object} config - Parsed stroycommuteConfig (apiKey, trackedStops,
  *   trackedLines, alertSchedule, timelineEnabled).
  */
+// Id of the saved config, sent with it to the watch and echoed in every
+// departureUpdate as it was when the request came in: the watch drops
+// replies to requests made under an earlier config. A new pkjs start picks
+// a new one (the watch then gets the config again with it).
+let configId = Date.now() % 1000000000;
+
 function sendConfigToWatch(rawConfig) {
 	const config = normalizeConfig(rawConfig);
 	// Lines added in the alerts section (the watch always shows them); the
@@ -1839,6 +1847,7 @@ function sendConfigToWatch(rawConfig) {
 			autoOpen: config.autoOpen ? 1 : 0,
 			// Watch screens: 0 stops and alerts, 1 stops only, 2 alerts only.
 			screens: SCREENS_CODES[config.screens],
+			configId: configId,
 		},
 	];
 
@@ -2328,13 +2337,15 @@ function pruneLastGood(trackedStops) {
 function handleRefreshStop(request) {
 	const destStopRef = request.destStopRef || "";
 	const tripKey = [request.stopRef, request.lineRef, destStopRef].join("|");
+	// The config this request is answered under (see configId).
+	const requestConfigId = configId;
 	const send = (state, extra) =>
 		sendDepartureUpdate(
 			request.stopRef,
 			request.lineRef,
 			destStopRef,
 			state,
-			extra
+			Object.assign({ configId: requestConfigId }, extra || {})
 		);
 	const reply = (state, extra) => {
 		if (state === "ok") {

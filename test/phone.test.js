@@ -111,6 +111,27 @@ test("a request in flight under the old API key doesn't answer for the new one",
 	phone.restore();
 });
 
+test("each departure reply carries the id of the config it was asked under", () => {
+	const phone = withConfig();
+	const ask = () => phone.fromWatch({ itemType: "refreshStop", stopRef: STOP.stopRef, lineRef: STOP.lineRef, lineName: "4" });
+	const pending = () => phone.requests.filter((r) => /stop-monitoring/.test(r.url) && r.status === undefined);
+	ask();
+	const first = pending()[0];
+	phone.fire("webviewclosed", { response: encodeURIComponent(JSON.stringify({ ...CONFIG, apiKey: "new-key" })) });
+	const meta = phone.sent.filter((m) => m.itemType === "configMeta").at(-1);
+	ask();
+	const second = pending().find((r) => r !== first);
+	second.respond(200, siriAnswer(phone.now, [3, 9]));
+	first.respond(401, "");
+	phone.advance(2000);
+	const replies = phone.sent.filter((m) => m.itemType === "departureUpdate");
+	const fresh = replies.find((m) => m.state === "ok");
+	const old = replies.find((m) => m.state === "invalidKey");
+	assert.strictEqual(fresh.configId, meta.configId);
+	assert.notStrictEqual(old.configId, meta.configId);
+	phone.restore();
+});
+
 test("saving the settings drops the saved times of trips no longer tracked", () => {
 	const lastGood = {
 		[`${STOP.stopRef}|${STOP.lineRef}|`]: { at: 1, extra: {} },

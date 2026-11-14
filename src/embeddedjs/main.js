@@ -308,6 +308,7 @@ const ALL_MESSAGE_KEYS = [
 	"autoOpen",
 	"screens",
 	"alertPart",
+	"configId",
 ];
 const MESSAGE_KEY_CODES = new Map(
 	ALL_MESSAGE_KEYS.map((key, index) => [key, 10000 + index])
@@ -519,6 +520,7 @@ function handleConfigItem(item) {
 		screensMode = typeof item.screens === "number" ? item.screens : 0;
 		vibrateMinutes =
 			typeof item.vibrateMinutes === "number" ? item.vibrateMinutes : 0;
+		pendingConfigId = typeof item.configId === "number" ? item.configId : null;
 		pendingConfigCount = item.itemCount;
 		pendingStops = [];
 		pendingLines = [];
@@ -558,12 +560,10 @@ function onConfigReady() {
 	// known state, permanent errors included (see PERMANENT_ERROR_STATES).
 	departures.clear();
 	pendingAlerts.clear();
-	// Requests asked under the old config: their replies are dropped, and
-	// the new config's refresh is asked right away below.
-	for (const key of Array.from(pendingRefresh.keys())) {
-		staleRequests.set(key, Date.now() + REFRESH_INDICATOR_TIMEOUT_MS);
-		clearPendingRefresh(key);
-	}
+	// Requests asked under the old config: their replies are dropped (see
+	// configId), and the new config's refresh is asked right away below.
+	configId = pendingConfigId;
+	for (const key of Array.from(pendingRefresh.keys())) clearPendingRefresh(key);
 	// Traffic info of lines the new config no longer watches would
 	// otherwise keep their screen until the app is closed.
 	for (const lineRef of Array.from(lineAlerts.keys())) {
@@ -860,10 +860,12 @@ const PERMANENT_ERROR_STATES = ["invalidKey", "invalidStop"];
 
 // departureKey -> { startedAt, timeout } for each refresh in flight.
 const pendingRefresh = new Map();
-// departureKey -> until when (ms) the reply to a request asked under the
-// previous config is dropped: an answer for the old API key (invalidKey)
-// must not be kept, nor hold back the new config's request.
-const staleRequests = new Map();
+// The phone's id for the config loaded (configMeta.configId), echoed in
+// each departureUpdate as it was when the request was answered: a reply to
+// a request made under an earlier config (an invalidKey for the old API
+// key) is dropped, whatever order the replies come in.
+let configId = null;
+let pendingConfigId = null;
 let refreshTimer = null;
 
 // Plain-ASCII spinner: the Gothic bitmap font has no arrow or spinner glyph.
@@ -918,10 +920,12 @@ function handleDepartureUpdate(item) {
 		quotaRemaining = item.quotaRemaining;
 	}
 	const key = departureKey(item);
-	const staleUntil = staleRequests.get(key);
-	if (staleUntil !== undefined) {
-		staleRequests.delete(key);
-		if (Date.now() < staleUntil) return;
+	if (
+		typeof item.configId === "number" &&
+		configId !== null &&
+		item.configId !== configId
+	) {
+		return;
 	}
 	const entry = pendingRefresh.get(key);
 	const elapsed = entry
