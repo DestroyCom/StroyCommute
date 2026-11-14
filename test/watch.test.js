@@ -103,6 +103,32 @@ test("an error state with nothing to fall back on is shown in place of the times
 	watch.restore();
 });
 
+test("a reply asked under the previous config is dropped, and the new one is asked", async () => {
+	const watch = await started();
+	const asked = () => watch.sent.filter((m) => m.itemType === "refreshStop").length;
+	const before = asked();
+	// The user fixes the API key while the first request is in flight.
+	for (const item of configItems([STOP])) watch.deliver(item);
+	assert.strictEqual(asked(), before + 1);
+	watch.deliver({ ...OK, state: "invalidKey" }); // the old request's answer
+	watch.advance(1600);
+	assert.ok(!watch.screen().includes("Clé API invalide"));
+	watch.deliver(OK); // the new one's
+	assert.ok(watch.screen().includes("Vers Porte de Clignancourt"));
+	watch.restore();
+});
+
+test("config requests made while the phone is unreachable don't use up the retries", async () => {
+	const watch = await loadWatch();
+	watch.advance(10000); // phone side not ready: nothing can be sent
+	watch.connect();
+	const requests = () => watch.sent.filter((m) => m.itemType === "configResendRequest").length;
+	assert.strictEqual(requests(), 1);
+	watch.advance(1600); // the config doesn't come: asked again
+	assert.strictEqual(requests(), 2);
+	watch.restore();
+});
+
 test("Down cycles to the settings screen with the quota", async () => {
 	const watch = await started();
 	watch.deliver(OK);
@@ -207,6 +233,20 @@ test("vibrates once when the next departure comes within the setting", async () 
 	watch.emit("minutechange"); // 2 min
 	watch.advance(60000);
 	watch.emit("minutechange"); // 1 min: no second vibration
+	assert.deepStrictEqual(watch.vibrations, ["double"]);
+	watch.restore();
+});
+
+test("the train after one at the platform still vibrates on approach", async () => {
+	const watch = await loadWatch();
+	watch.connect();
+	for (const item of configItems([STOP], "fr", 2)) watch.deliver(item);
+	// At the platform now, the next one in 6 min; no fresh reply after.
+	watch.deliver({ ...timed(watch, 0, 6), atStop: 1 });
+	for (let i = 0; i < 4; i++) {
+		watch.advance(60000);
+		watch.emit("minutechange"); // the first has left: the second takes over
+	}
 	assert.deepStrictEqual(watch.vibrations, ["double"]);
 	watch.restore();
 });

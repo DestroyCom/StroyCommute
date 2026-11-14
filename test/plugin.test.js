@@ -135,6 +135,33 @@ test("stops calling PRIM when the day's quota runs low, and counts its calls", a
 	again.restore();
 });
 
+test("an A->B trip isn't fetched when its second call would go below the reserve", async () => {
+	const today = new Date(Date.UTC(2026, 10, 13, 8)).toISOString().slice(0, 10);
+	const ab = { ...STOP, destStopRef: "STIF:StopArea:SP:2:", destStopName: "Arcueil" };
+	const storage = withConfig({ ...CONFIG, trackedStops: [ab] });
+	storage.set("stroycommuteQuota", JSON.stringify({ date: today, count: 700 })); // 300 left
+	const plugin = loadPlugin({ storage });
+	await plugin.read();
+	assert.strictEqual(plugin.urls.length, 0);
+	plugin.restore();
+	// A one-stop trip may still use the 300th call.
+	const single = withConfig();
+	single.set("stroycommuteQuota", JSON.stringify({ date: today, count: 700 }));
+	const again = loadPlugin({ storage: single });
+	await again.read();
+	assert.strictEqual(again.urls.length, 1);
+	again.restore();
+});
+
+test("trains that have left don't push a later one out of the answer", async () => {
+	const now = Date.UTC(2026, 10, 13, 8);
+	const plugin = loadPlugin({ storage: withConfig(), now, answer: () => siriAnswer(now, [-5, -3, 4]) });
+	const { data } = await plugin.read();
+	assert.strictEqual(data.instances.length, 1);
+	assert.strictEqual(data.instances[0].properties.next.shortText.text, "4 min");
+	plugin.restore();
+});
+
 test("honours the app's call guard", async () => {
 	const storage = withConfig({ ...CONFIG, callGuard: { maxCalls: 2, windowMinutes: 10, pauseMinutes: 15 } });
 	const now = Date.UTC(2026, 10, 13, 8);

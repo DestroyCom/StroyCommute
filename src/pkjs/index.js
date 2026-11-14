@@ -2099,7 +2099,9 @@ function cachedVisits(ref, lineRef) {
 
 /** @returns {boolean} True when getStopVisits would make a PRIM call. */
 function needsFetch(ref, lineRef) {
-	return !cachedVisits(ref, lineRef) && !inFlight.has(visitsKey(ref, lineRef));
+	if (cachedVisits(ref, lineRef)) return false;
+	const prefix = `${visitsKey(ref, lineRef)}|`;
+	return !Array.from(inFlight.keys()).some((k) => k.indexOf(prefix) === 0);
 }
 
 /**
@@ -2116,15 +2118,18 @@ function getStopVisits(apiKey, ref, lineRef, done) {
 		done("ok", cached);
 		return;
 	}
-	const waiting = inFlight.get(key);
+	// Shared only under the same API key: a request made before the key
+	// was changed must not answer for the new one.
+	const flightKey = `${key}|${apiKey}`;
+	const waiting = inFlight.get(flightKey);
 	if (waiting) {
 		waiting.push(done);
 		return;
 	}
-	inFlight.set(key, [done]);
+	inFlight.set(flightKey, [done]);
 	fetchStopVisits(apiKey, ref, lineRef, (state, visits) => {
-		const callbacks = inFlight.get(key) || [];
-		inFlight.delete(key);
+		const callbacks = inFlight.get(flightKey) || [];
+		inFlight.delete(flightKey);
 		if (state === "ok") responseCache.set(key, { at: Date.now(), visits });
 		for (const callback of callbacks) {
 			try {
@@ -2487,7 +2492,7 @@ const GENERAL_MESSAGE_URL =
 const ALERTS_KEY = "stroycommuteAlerts"; // lineRef -> { at, messages }
 const ALERTS_SEEN_KEY = "stroycommuteAlertSeen"; // message id -> first seen
 const ALERTS_TRIED_KEY = "stroycommuteAlertTried"; // lineRef -> last call (ms)
-const ALERTS_PINNED_KEY = "stroycommuteAlertPinned"; // message id -> true
+const ALERTS_PINNED_KEY = "stroycommuteAlertPinned"; // message id -> { lineName, text } (true before)
 const ALERT_CACHE_MS = 10 * 60000;
 // Notifications per check, at most (several new messages at once usually
 // mean a network-wide event, and the watch screens list them all anyway).
@@ -2544,12 +2549,40 @@ function fetchGeneralMessages(apiKey, lineRef, done) {
  * Brings every watched line's messages up to date (cached ones younger
  * than ALERT_CACHE_MS are reused), then notifies, pins and tells the watch.
  */
+// One traffic info check at a time: two overlapping ones could store an
+// older answer over a newer one (and call it new or ended). One asked
+// meanwhile runs once the current one is over.
+let alertRefreshRunning = false;
+let alertRefreshAgain = false;
+
 function refreshAlerts() {
+	if (alertRefreshRunning) {
+		alertRefreshAgain = true;
+		return;
+	}
+	alertRefreshRunning = true;
+	const over = () => {
+		alertRefreshRunning = false;
+		if (alertRefreshAgain) {
+			alertRefreshAgain = false;
+			refreshAlerts();
+		}
+	};
+	try {
+		checkAlerts(over);
+	} catch (error) {
+		over();
+		throw error;
+	}
+}
+
+/** The traffic info check itself; calls `over()` once it is finished. */
+function checkAlerts(over) {
 	const stored = storedConfig();
-	if (!stored || !stored.apiKey) return;
+	if (!stored || !stored.apiKey) return over();
 	const config = normalizeConfig(stored);
 	const lines = alerts.alertLines(config);
-	if (lines.length === 0) return;
+	if (lines.length === 0) return over();
 	const cache = readJson(ALERTS_KEY, {});
 	const previous = {}; // message id -> { text, lineName }, before this check
 	for (const line of lines) {
@@ -2578,8 +2611,13 @@ function refreshAlerts() {
 		.map((x) => x.line);
 	// lineRef -> why its check failed ("rateLimited" or "network").
 	const failed = {};
-	const finish = () =>
-		afterAlertRefresh(config, lines, cache, previous, failed);
+	const finish = () => {
+		try {
+			afterAlertRefresh(config, lines, cache, previous, failed);
+		} finally {
+			over();
+		}
+	};
 	// The user's call guard covers every PRIM call, traffic info included
 	// (the daily quotas stay per endpoint). Only the calls that fit without
 	// starting a pause are made; the other lines wait for the next check,
@@ -2667,6 +2705,7 @@ function afterAlertRefresh(config, lines, cache, previous, failed) {
 			// Pins every current message not pinned yet -- not just the new ones:
 			// messages first seen while the timeline was off still get theirs once
 			// it's turned on.
+			// Stored per pinned id: its line and text, for the end pin.
 			const pinned = readJson(ALERTS_PINNED_KEY, {});
 			const nowPinned = {};
 			for (const id of Object.keys(byId)) {
@@ -2675,12 +2714,19 @@ function afterAlertRefresh(config, lines, cache, previous, failed) {
 						alerts.alertPin(byId[id], lineOf[id].lineName, diff.seen[id], texts)
 					);
 				}
-				nowPinned[id] = true;
+				nowPinned[id] = { lineName: lineOf[id].lineName, text: byId[id].text };
 			}
 			localStorage.setItem(ALERTS_PINNED_KEY, JSON.stringify(nowPinned));
-			for (const id of diff.ended) {
+			// Over: those that just ended, and pinned ones that ended while
+			// the timeline was off (gone from `seen` since).
+			const ended = diff.ended.slice();
+			for (const id of Object.keys(pinned)) {
+				if (!byId[id] && ended.indexOf(id) < 0) ended.push(id);
+			}
+			for (const id of ended) {
 				Pebble.deleteTimelinePin(alerts.pinId(id));
-				const last = previous[id];
+				const last =
+					previous[id] || (typeof pinned[id] === "object" ? pinned[id] : null);
 				if (last) {
 					Pebble.insertTimelinePin(
 						alerts.endPin(id, last.lineName, last.text, now, texts)

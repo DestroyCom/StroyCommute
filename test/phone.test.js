@@ -99,6 +99,18 @@ test("a config saved by an older version, without schedule, still reaches the wa
 	phone.restore();
 });
 
+test("a request in flight under the old API key doesn't answer for the new one", () => {
+	const phone = withConfig();
+	const ask = () => phone.fromWatch({ itemType: "refreshStop", stopRef: STOP.stopRef, lineRef: STOP.lineRef, lineName: "4" });
+	const calls = () => phone.requests.filter((r) => /stop-monitoring/.test(r.url));
+	ask();
+	assert.strictEqual(calls().length, 1);
+	phone.fire("webviewclosed", { response: encodeURIComponent(JSON.stringify({ ...CONFIG, apiKey: "new-key" })) });
+	ask();
+	assert.strictEqual(calls().length, 2);
+	phone.restore();
+});
+
 test("saving the settings drops the saved times of trips no longer tracked", () => {
 	const lastGood = {
 		[`${STOP.stopRef}|${STOP.lineRef}|`]: { at: 1, extra: {} },
@@ -238,6 +250,43 @@ test("alerts: turning the timeline on pins the disruptions already known, once",
 	phone.fromWatch({ itemType: "refreshAlerts" });
 	answerAlerts(phone, { [line]: gmAnswer(line, ["a"]) });
 	assert.strictEqual(phone.pins.size, 0);
+	phone.restore();
+});
+
+test("alerts: a disruption that ended while the timeline was off loses its pin once it's back on", () => {
+	const storage = new Map([["stroycommuteConfig", JSON.stringify(ALERT_CONFIG)]]);
+	const phone = loadPhone({ storage });
+	const line = "STIF:Line::C01743:";
+	const check = (ids) => {
+		phone.fromWatch({ itemType: "refreshAlerts" });
+		answerAlerts(phone, { [line]: gmAnswer(line, ids) });
+		phone.advance(11 * 60000);
+	};
+	check(["a"]);
+	assert.ok(phone.pins.has("alert-a"));
+	storage.set("stroycommuteConfig", JSON.stringify({ ...ALERT_CONFIG, timelineEnabled: false }));
+	check([]); // "a" ends while the timeline is off
+	assert.ok(phone.pins.has("alert-a"));
+	storage.set("stroycommuteConfig", JSON.stringify(ALERT_CONFIG));
+	check([]);
+	assert.ok(!phone.pins.has("alert-a"));
+	assert.ok(phone.pins.has("alert-a-end"));
+	phone.restore();
+});
+
+test("alerts: a check asked while one is running waits for it", () => {
+	const phone = loadPhone({ storage: new Map([["stroycommuteConfig", JSON.stringify(ALERT_CONFIG)]]) });
+	const line = "STIF:Line::C01743:";
+	const calls = () => phone.requests.filter((r) => /general-message/.test(r.url) && r.url.includes(encodeURIComponent(line)));
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	assert.strictEqual(calls().length, 1);
+	answerAlerts(phone, { [line]: gmAnswer(line, ["a"]) });
+	phone.advance(5000);
+	// The second check ran after it, from the fresh answer: no second call.
+	assert.strictEqual(calls().length, 1);
+	const updates = phone.sent.filter((m) => m.itemType === "alertUpdate" && m.lineRef === line);
+	assert.strictEqual(updates.length, 2);
 	phone.restore();
 });
 

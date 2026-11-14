@@ -31,7 +31,12 @@ class FakeContent {
  * @param {Map<string, string>} [options.storage] - Initial watch localStorage.
  * @returns {Promise<object>} Handle to drive and inspect the watch app.
  */
+// The restore of the last simulator loaded: a test that failed before its
+// own watch.restore() doesn't leave its fake clock to the next one.
+let restoreLast = null;
+
 async function loadWatch(options = {}) {
+	if (restoreLast) restoreLast();
 	const storage = options.storage || new Map();
 	let now = 1_000_000;
 	const timers = [];
@@ -245,8 +250,10 @@ async function loadWatch(options = {}) {
 		},
 		restore() {
 			Date.now = realNow;
+			restoreLast = null;
 		},
 	};
+	restoreLast = handle.restore;
 	return handle;
 }
 

@@ -487,9 +487,13 @@ function requestConfigResend() {
 		console.log(`config still not loaded after ${MAX_CONFIG_RESENDS} requests`);
 		return;
 	}
-	configResendCount++;
-	note(`resend ${configResendCount}`);
-	configRequestPending = true;
+	// The last request is still waiting for the phone: no new one, and no
+	// retry spent until one is actually sent.
+	if (!configRequestPending) {
+		configResendCount++;
+		note(`resend ${configResendCount}`);
+		configRequestPending = true;
+	}
 	flushOutbox();
 	scheduleConfigResendTimeout();
 }
@@ -554,6 +558,12 @@ function onConfigReady() {
 	// known state, permanent errors included (see PERMANENT_ERROR_STATES).
 	departures.clear();
 	pendingAlerts.clear();
+	// Requests asked under the old config: their replies are dropped, and
+	// the new config's refresh is asked right away below.
+	for (const key of Array.from(pendingRefresh.keys())) {
+		staleRequests.set(key, Date.now() + REFRESH_INDICATOR_TIMEOUT_MS);
+		clearPendingRefresh(key);
+	}
 	// Traffic info of lines the new config no longer watches would
 	// otherwise keep their screen until the app is closed.
 	for (const lineRef of Array.from(lineAlerts.keys())) {
@@ -850,6 +860,10 @@ const PERMANENT_ERROR_STATES = ["invalidKey", "invalidStop"];
 
 // departureKey -> { startedAt, timeout } for each refresh in flight.
 const pendingRefresh = new Map();
+// departureKey -> until when (ms) the reply to a request asked under the
+// previous config is dropped: an answer for the old API key (invalidKey)
+// must not be kept, nor hold back the new config's request.
+const staleRequests = new Map();
 let refreshTimer = null;
 
 // Plain-ASCII spinner: the Gothic bitmap font has no arrow or spinner glyph.
@@ -904,6 +918,11 @@ function handleDepartureUpdate(item) {
 		quotaRemaining = item.quotaRemaining;
 	}
 	const key = departureKey(item);
+	const staleUntil = staleRequests.get(key);
+	if (staleUntil !== undefined) {
+		staleRequests.delete(key);
+		if (Date.now() < staleUntil) return;
+	}
 	const entry = pendingRefresh.get(key);
 	const elapsed = entry
 		? Date.now() - entry.startedAt
@@ -1037,9 +1056,13 @@ function checkApproach() {
 	// biome-ignore lint/complexity/useOptionalChain: see requestRefresh
 	if (!item || item.type !== "stop") return;
 	const dep = departures.get(departureKey(item));
-	if (!dep || dep.state !== "ok" || dep.cancelled || dep.atStop) return;
+	if (!dep || dep.state !== "ok") return;
 	const next = nextDepartures(dep);
 	if (next === null || next.departTime === null) return;
+	// The first train's flags. A train that took over after one at the
+	// platform has left still vibrates; after a cancelled one it is
+	// cancelled too (pkjs ranks cancelled trains last).
+	if (dep.cancelled || (dep.atStop && !next.shifted)) return;
 	if (next.minutes > vibrateMinutes) {
 		seenAboveThreshold.add(next.departTime);
 	} else if (

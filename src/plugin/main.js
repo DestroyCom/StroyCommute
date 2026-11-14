@@ -109,10 +109,17 @@ async function fetchVisits(apiKey, ref, lineRef, now) {
  *   departure has a usable time.
  */
 function summarize(visits, now) {
-	// A cancelled train is never served as a departure.
+	// A cancelled train, or one that has left, is never served: dropped
+	// before picking the two kept, so a later train isn't lost to them.
 	const departures = trips
 		.rankDepartures(visits, now)
-		.filter((d) => !d.cancelled);
+		.filter(
+			(d) =>
+				!d.cancelled &&
+				(d.atStop ||
+					typeof d.timeMs !== "number" ||
+					d.timeMs >= now - LEFT_AFTER_MS)
+		);
 	if (departures.length === 0) return null;
 	const first = departures[0];
 	const second = departures.length > 1 ? departures[1] : null;
@@ -136,10 +143,11 @@ async function tripTimes(config, stop, cached, now) {
 	if (cached && now - cached.at < MIN_FETCH_MS) return cached;
 	const tried = readJson(TRIED_KEY, {});
 	if (now - (tried[tripKey(stop)] || 0) < MIN_FETCH_MS) return cached;
-	if (quotaLeft(now) < QUOTA_RESERVE) return cached;
 	const refs = stop.destStopRef
 		? [stop.stopRef, stop.destStopRef]
 		: [stop.stopRef];
+	// QUOTA_RESERVE left before each call, an A->B trip's second one too.
+	if (quotaLeft(now) - (refs.length - 1) < QUOTA_RESERVE) return cached;
 	if (refs.some((ref) => /:monomodalStopPlace:$/.test(ref))) return null;
 	const guard = trips.decideCallGuard(
 		readJson(GUARD_KEY, null),
