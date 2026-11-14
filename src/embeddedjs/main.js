@@ -35,7 +35,7 @@ const STRINGS = {
 	fr: {
 		loading: "Chargement...",
 		noStops: "Aucun arrêt configuré",
-		configureHint: "Ajoute des arrêts dans l'app Pebble",
+		configureHint: "Ajoute-en dans l'app Pebble",
 		cycleHint: "Haut / Bas pour changer",
 		network: "Erreur réseau",
 		noRealtimeData: "Pas de temps réel pour cet arrêt",
@@ -1235,7 +1235,9 @@ const LAYOUT = ROUND
 			status: [134, 20],
 			next: [170, 30],
 			alert: [198, 46],
-			footer: [222, 70],
+			// 160 px wide, in 14 px (see createView): the circle is too narrow
+			// lower down for the hints in 18 px.
+			footer: [216, 50],
 			body: [72, 28, 150],
 		}
 	: {
@@ -1294,7 +1296,7 @@ function createView() {
 	view.status = label("status", titleStyle);
 	view.next = label("next", bodyStyle);
 	view.alert = label("alert", errorStyle);
-	view.footer = label("footer", rowStyle);
+	view.footer = label("footer", ROUND ? smallStyle : rowStyle);
 	// A line's traffic info: several lines of text under its name.
 	const [bodyTop, bodyInset, bodyHeight] = LAYOUT.body;
 	view.body = new Text(null, {

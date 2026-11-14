@@ -238,7 +238,8 @@ test("says when the phone is disconnected, keeping the last times", async () => 
 
 test("with nothing configured, the screen says so and where to fix it", async () => {
 	const watch = await started([]);
-	assert.deepStrictEqual(watch.screen(), ["Aucun arrêt configuré", "Ajoute des arrêts dans l'app Pebble"]);
+	// Short enough for the round screen's narrow bottom line (Gabbro).
+	assert.deepStrictEqual(watch.screen(), ["Aucun arrêt configuré", "Ajoute-en dans l'app Pebble"]);
 	watch.press("down"); // nothing to cycle to
 	assert.strictEqual(watch.screen()[0], "Aucun arrêt configuré");
 	watch.restore();
@@ -249,7 +250,12 @@ test("the round screen (Gabbro) keeps the text away from the edges", async () =>
 	const [banner, , line, , status, , , footer] = watch.root.contents[0].contents;
 	assert.ok(banner.top > 0);
 	assert.ok(line.left >= 20 && status.top > 120);
-	assert.ok(footer.left >= 60);
+	// The bottom of the circle is narrow: a 120 px wide 18 px footer let
+	// "Haut / Bas pour changer" and the setup hint run past its right edge
+	// (seen on the Gabbro emulator). Smaller font, wider and a bit higher.
+	assert.ok(footer.left >= 40 && footer.top <= 216);
+	assert.ok(260 - footer.left - footer.right >= 160);
+	assert.match(footer.style.font, /^14px/);
 	watch.restore();
 });
 
