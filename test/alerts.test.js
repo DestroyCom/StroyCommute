@@ -73,3 +73,24 @@ test("pins for a message and for its end", () => {
 	assert.strictEqual(end.id, `${pin.id}-end`);
 	assert.strictEqual(end.layout.subtitle, "Fin de perturbation");
 });
+
+test("alertTextFor orders messages ending soonest first, undated last", () => {
+	const messages = [
+		{ id: "1", text: "c", validUntil: 300 },
+		{ id: "2", text: "n", validUntil: null },
+		{ id: "3", text: "a", validUntil: 100 },
+	];
+	assert.strictEqual(alerts.alertTextFor(messages), "a\nc\nn");
+});
+
+test("alertTextFor keeps whole messages within the byte budget", () => {
+	const long = "é".repeat(280); // 560 UTF-8 bytes
+	const messages = [1, 2, 3].map((i) => ({ id: String(i), text: long, validUntil: i }));
+	assert.strictEqual(alerts.alertTextFor(messages, 1500), `${long}\n${long}`);
+});
+
+test("alertTextFor always keeps the first message", () => {
+	const text = "x".repeat(600);
+	assert.strictEqual(alerts.alertTextFor([{ id: "1", text: text, validUntil: null }], 100), text);
+	assert.strictEqual(alerts.alertTextFor([]), "");
+});

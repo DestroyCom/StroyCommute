@@ -2460,8 +2460,6 @@ const ALERT_CACHE_MS = 10 * 60000;
 // Notifications per check, at most (several new messages at once usually
 // mean a network-wide event, and the watch screens list them all anyway).
 const MAX_NOTIFICATIONS = 3;
-// What the watch gets per line: the messages' texts, this long at most.
-const MAX_ALERT_TEXT = 360;
 const ALERT_TEXTS = {
 	fr: { trafficInfo: "Info trafic", trafficEnded: "Fin de perturbation" },
 	en: { trafficInfo: "Traffic info", trafficEnded: "Disruption over" },
@@ -2609,7 +2607,8 @@ function afterAlertRefresh(config, lines, cache, previous) {
 		}
 	}
 
-	// One alertUpdate per line, its messages' texts joined.
+	// One alertUpdate per line: its messages whole, most urgent first
+	// (alertTextFor), with the line's colours from a tracked stop on it.
 	sendItemsSequentially(
 		lines.map((line) => {
 			const entry = kept[line.lineRef];
@@ -2620,11 +2619,12 @@ function afterAlertRefresh(config, lines, cache, previous) {
 				lineName: line.lineName,
 				alertCount: messages.length,
 			};
-			if (messages.length) {
-				item.alertText = messages
-					.map((m) => m.text)
-					.join("\n")
-					.slice(0, MAX_ALERT_TEXT);
+			if (messages.length) item.alertText = alerts.alertTextFor(messages);
+			const stop = config.trackedStops.find((s) => s.lineRef === line.lineRef);
+			if (stop) {
+				const colors = watchLineColors(stop.lineColor, stop.lineTextColor);
+				item.lineColor = colors.color;
+				item.lineTextColor = colors.textColor;
 			}
 			return item;
 		}),

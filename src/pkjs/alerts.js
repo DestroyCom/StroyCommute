@@ -182,7 +182,48 @@ function endPin(id, lineName, text, now, texts) {
 	};
 }
 
+/** @param {string} s @returns {number} Its length in UTF-8 bytes. */
+function utf8Length(s) {
+	return unescape(encodeURIComponent(s)).length;
+}
+
+/**
+ * @param {{id: string, text: string, validUntil: ?number}[]} messages - A
+ *   line's messages.
+ * @param {number} [maxBytes] - The watch's AppMessage inbox fits one
+ *   alertUpdate of about 2 KB: 1500 bytes of text leave room for the rest.
+ * @returns {string} Their texts, the message ending soonest first (usually
+ *   what is happening now rather than works announced weeks ahead; no end
+ *   date last), joined with "\n", whole messages only while the total stays
+ *   within `maxBytes`. The first message is always there.
+ */
+function alertTextFor(messages, maxBytes) {
+	const budget = maxBytes || 1500;
+	const ordered = (messages || [])
+		.map((m, i) => ({ m: m, i: i }))
+		.sort((a, b) => {
+			const ua =
+				typeof a.m.validUntil === "number"
+					? a.m.validUntil
+					: Number.POSITIVE_INFINITY;
+			const ub =
+				typeof b.m.validUntil === "number"
+					? b.m.validUntil
+					: Number.POSITIVE_INFINITY;
+			return ua === ub ? a.i - b.i : ua - ub;
+		})
+		.map((x) => x.m.text);
+	let text = "";
+	for (const message of ordered) {
+		const next = text ? `${text}\n${message}` : message;
+		if (text && utf8Length(next) > budget) break;
+		text = next;
+	}
+	return text;
+}
+
 module.exports = {
+	alertTextFor: alertTextFor,
 	MAX_TEXT: MAX_TEXT,
 	parseGeneralMessages: parseGeneralMessages,
 	alertLines: alertLines,

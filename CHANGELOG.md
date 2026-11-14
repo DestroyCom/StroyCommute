@@ -11,7 +11,7 @@ version texte à coller dans le store.
 
 ### Nouveautés
 
-- Alertes trafic : les perturbations des lignes de tes arrêts (et des lignes que tu ajoutes) s'affichent sur la montre, avec un écran par ligne perturbée et un rappel sur l'écran de l'arrêt.
+- Alertes trafic : les perturbations des lignes de tes arrêts (et des lignes que tu ajoutes) s'affichent sur la montre, avec un écran par ligne perturbée et un rappel sur l'écran de l'arrêt. Chaque perturbation est lisible en entier, la plus urgente en premier.
 - Notification sur la montre quand une nouvelle perturbation apparaît pendant ton créneau de trajet (réglable), et ajout des perturbations et de leur fin à la timeline (option), y compris celles déjà en cours quand tu l'actives ; les réglages rappellent d'autoriser la timeline pour l'app dans l'app Pebble.
 - Option pour ouvrir l'app automatiquement au début de ton créneau de trajet.
 - Tes prochains départs peuvent s'afficher sur les cadrans compatibles avec les plugins Pebble (aperçu à activer dans l'app Pebble), avec une consommation de quota limitée. Réglage « Cadrans » pour le désactiver.

@@ -197,7 +197,8 @@ test("alerts: one call per watched line, an alertUpdate each, no burst on the fi
 	phone.advance(2000);
 	const updates = phone.sent.filter((m) => m.itemType === "alertUpdate");
 	assert.deepStrictEqual(updates.map((u) => [u.lineName, u.alertCount]), [["RER B", 4], ["4", 0]]);
-	assert.match(updates[0].alertText, /^Du 21 novembre/);
+	// Ending soonest first: the rugby match message (valid until 14/11 03:30).
+	assert.match(updates[0].alertText, /Match de rugby/);
 	assert.deepStrictEqual(phone.notifications, []);
 	assert.strictEqual(phone.pins.size, 4); // first check: current messages pinned
 	phone.restore();
@@ -262,5 +263,28 @@ test("the quota shown on the watch comes from PRIM's own header when present", (
 	phone.fromWatch(REFRESH);
 	phone.requests[0].respond(200, siriAnswer(phone.now, [5]), { "X-Ratelimit-Remaining-Day": "774" });
 	assert.strictEqual(updates(phone)[0].quotaRemaining, 774);
+	phone.restore();
+});
+
+test("alerts: the watch gets every message whole, ordered, with the line's colours", () => {
+	const { watchLineColors } = require("../src/pkjs/colors");
+	const config = {
+		...ALERT_CONFIG,
+		trackedStops: [STOP, { ...STOP, lineRef: "STIF:Line::C01743:", lineName: "RER B", lineColor: "#5291CE", lineTextColor: "#FFFFFF" }],
+	};
+	const phone = loadPhone({ storage: new Map([["stroycommuteConfig", JSON.stringify(config)]]) });
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	answerAlerts(phone, { "STIF:Line::C01743:": gm("gm-rer-b.json") });
+	phone.advance(2000);
+	const rerB = phone.sent.find((m) => m.itemType === "alertUpdate" && m.lineRef === "STIF:Line::C01743:");
+	assert.strictEqual(rerB.alertCount, 4);
+	const texts = rerB.alertText.split("\n");
+	assert.strictEqual(texts.length, 4);
+	assert.ok(texts.every((t) => !/\/$/.test(t)));
+	assert.strictEqual(rerB.lineColor, watchLineColors("#5291CE", "#FFFFFF").color);
+	assert.strictEqual(rerB.lineTextColor, watchLineColors("#5291CE", "#FFFFFF").textColor);
+	// A line no tracked stop gives colours to: none sent.
+	const line4 = phone.sent.find((m) => m.itemType === "alertUpdate" && m.lineRef === STOP.lineRef);
+	assert.ok(line4);
 	phone.restore();
 });
