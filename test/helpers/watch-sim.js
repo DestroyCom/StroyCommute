@@ -31,6 +31,26 @@ class FakeContent {
  * @param {Map<string, string>} [options.storage] - Initial watch localStorage.
  * @returns {Promise<object>} Handle to drive and inspect the watch app.
  */
+/** Imports main.js (or `main`) with the Pebble modules pointed at the fakes. */
+async function importMain(main) {
+	// main.js imports "pebble/message"; point it at the fake instead.
+	const source = fs
+		.readFileSync(main, "utf8")
+		.replace(
+			'import Message from "pebble/message";',
+			"const Message = globalThis.__Message;"
+		)
+		.replace('import Vibes from "pebble/vibes";', "const Vibes = globalThis.__Vibes;")
+		.replace('import WakeUp from "pebble/wakeup";', "const WakeUp = globalThis.__WakeUp;");
+	const file = path.join(os.tmpdir(), `stroycommute-main-${process.pid}-${++loads}.mjs`);
+	fs.writeFileSync(file, source);
+	try {
+		await import(pathToFileURL(file).href);
+	} finally {
+		fs.unlinkSync(file);
+	}
+}
+
 // The restore of the last simulator loaded: a test that failed before its
 // own watch.restore() doesn't leave its fake clock to the next one.
 let restoreLast = null;
@@ -151,22 +171,17 @@ async function loadWatch(options = {}) {
 	Object.assign(globalThis, fakes);
 	const realNow = Date.now;
 	Date.now = () => now;
-
-	// main.js imports "pebble/message"; point it at the fake instead.
-	const source = fs
-		.readFileSync(MAIN, "utf8")
-		.replace(
-			'import Message from "pebble/message";',
-			"const Message = globalThis.__Message;"
-		)
-		.replace('import Vibes from "pebble/vibes";', "const Vibes = globalThis.__Vibes;")
-		.replace('import WakeUp from "pebble/wakeup";', "const WakeUp = globalThis.__WakeUp;");
-	const file = path.join(os.tmpdir(), `stroycommute-main-${process.pid}-${++loads}.mjs`);
-	fs.writeFileSync(file, source);
+	// Registered now, not once loaded: a load that fails below must not
+	// leave the fake clock for the next one to take as the real one.
+	restoreLast = () => {
+		Date.now = realNow;
+		restoreLast = null;
+	};
 	try {
-		await import(pathToFileURL(file).href);
-	} finally {
-		fs.unlinkSync(file);
+		await importMain(options.main || MAIN);
+	} catch (error) {
+		restoreLast();
+		throw error;
 	}
 
 	/** Collects the visible strings of a content tree, in order. */

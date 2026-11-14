@@ -1016,6 +1016,27 @@ function minutesUntil(epochSeconds) {
  *   every known train has left.
  */
 function nextDepartures(dep) {
+	// A train at the platform comes without a time (pkjs sends none): seen
+	// there over AT_STOP_FOR_MS ago with no fresh reply, it has most likely
+	// left, and a timed following train takes over.
+	if (
+		dep.atStop &&
+		typeof dep.departTime !== "number" &&
+		typeof dep.departTime2 === "number" &&
+		Date.now() - dep.receivedAt > AT_STOP_FOR_MS
+	) {
+		const second = minutesUntil(dep.departTime2);
+		if (second < -1) return null;
+		return {
+			minutes: Math.max(0, second),
+			departTime: dep.departTime2,
+			minutes2: null,
+			mission: dep.mission2,
+			mission2: "",
+			destination: "",
+			shifted: true,
+		};
+	}
 	if (typeof dep.departTime !== "number") {
 		return {
 			minutes: dep.minutes,
@@ -1052,6 +1073,10 @@ function nextDepartures(dep) {
 		shifted: false,
 	};
 }
+
+// How long (ms) a train seen at the platform is shown there without a
+// fresh reply before the following one takes over (see nextDepartures).
+const AT_STOP_FOR_MS = 3 * 60000;
 
 // Approach vibration: once per departure, when the countdown of the stop on
 // screen goes from above vibrateMinutes to at or below it. A train already

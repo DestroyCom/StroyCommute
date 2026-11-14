@@ -32,6 +32,15 @@ async function started(stops = [STOP], options) {
 	return watch;
 }
 
+test("a simulator that fails to load doesn't leave its fake clock behind", async () => {
+	const realNow = Date.now;
+	await assert.rejects(loadWatch({ main: "/nonexistent/main.js" }));
+	assert.strictEqual(Date.now, realNow);
+	const watch = await loadWatch();
+	watch.restore();
+	assert.strictEqual(Date.now, realNow);
+});
+
 test("uses a single Message instance", async () => {
 	const watch = await loadWatch();
 	assert.strictEqual(watch.instances.length, 1);
@@ -252,9 +261,13 @@ test("the train after one at the platform still vibrates on approach", async () 
 	const watch = await loadWatch();
 	watch.connect();
 	for (const item of configItems([STOP], "fr", 2)) watch.deliver(item);
-	// At the platform now, the next one in 6 min; no fresh reply after.
-	watch.deliver({ ...timed(watch, 0, 6), atStop: 1 });
-	for (let i = 0; i < 4; i++) {
+	// At the platform now (no time for it, as pkjs sends it), the next one
+	// in 8 min; no fresh reply after.
+	const reply = { ...timed(watch, 0, 8), atStop: 1, minutes: -1 };
+	delete reply.departTime;
+	watch.deliver(reply);
+	assert.ok(watch.screen().some((line) => line.startsWith("À quai")));
+	for (let i = 0; i < 6; i++) {
 		watch.advance(60000);
 		watch.emit("minutechange"); // the first has left: the second takes over
 	}
