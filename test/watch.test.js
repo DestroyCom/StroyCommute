@@ -367,6 +367,23 @@ test("an alert screen shows one message under the line banner, Select shows the 
 	watch.restore();
 });
 
+test("a line's messages sent in parts are all reachable, shown once complete", async () => {
+	const watch = await started();
+	watch.deliver({ ...ALERT2, alertCount: 3, alertText: "Premier message\nSecond message" });
+	// Not complete yet: no alert screen.
+	assert.ok(!watch.screen().some((s) => /Info trafic/.test(s)));
+	watch.deliver({ itemType: "alertUpdate", lineRef: ALERT2.lineRef, lineName: "4", alertCount: 3, alertPart: 1, alertText: "Troisième message" });
+	watch.press("down");
+	assert.deepStrictEqual(watch.screen(), ["4  1/3", "Select : suivante", "Premier message"]);
+	watch.press("select");
+	watch.press("select");
+	assert.deepStrictEqual(watch.screen(), ["4  3/3", "Select : suivante", "Troisième message"]);
+	// A further part without its first one is ignored.
+	watch.deliver({ itemType: "alertUpdate", lineRef: ALERT2.lineRef, lineName: "4", alertCount: 3, alertPart: 1, alertText: "Orphelin" });
+	assert.deepStrictEqual(watch.screen(), ["4  3/3", "Select : suivante", "Troisième message"]);
+	watch.restore();
+});
+
 test("leaving the screen or new messages bring the alert back to its first page", async () => {
 	const watch = await onAlertScreen();
 	watch.press("select");

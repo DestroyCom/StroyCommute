@@ -305,6 +305,7 @@ const ALL_MESSAGE_KEYS = [
 	"alertText",
 	"autoOpen",
 	"screens",
+	"alertPart",
 ];
 const MESSAGE_KEY_CODES = new Map(
 	ALL_MESSAGE_KEYS.map((key, index) => [key, 10000 + index])
@@ -550,6 +551,7 @@ function onConfigReady() {
 	// A new config may have fixed the API key or the stop: forget every
 	// known state, permanent errors included (see PERMANENT_ERROR_STATES).
 	departures.clear();
+	pendingAlerts.clear();
 	// Traffic info of lines the new config no longer watches would
 	// otherwise keep their screen until the app is closed.
 	for (const lineRef of Array.from(lineAlerts.keys())) {
@@ -584,8 +586,11 @@ function onConfigReady() {
 // config loads and every ALERT_REFRESH_MS while the app is open.
 
 const ALERT_REFRESH_MS = 10 * 60000;
-// lineRef -> { lineName, count, text } from the latest alertUpdate.
+// lineRef -> { lineName, count, pages, color, textColor, stale } from the
+// latest complete alertUpdate.
 const lineAlerts = new Map();
+// The same for a line whose further parts (alertPart) are still to come.
+const pendingAlerts = new Map();
 let alertTimer = null;
 // Open the app when the schedule starts (config page option).
 let autoOpen = false;
@@ -608,17 +613,33 @@ function startAlertTimer() {
 function handleAlertUpdate(item) {
 	// A reply asked for before a config change can arrive after it.
 	if (!isWatchedLine(item.lineRef)) return;
-	const pages = item.alertText ? String(item.alertText).split("\n") : [];
+	const text = item.alertText ? String(item.alertText).split("\n") : [];
+	let entry;
+	if (item.alertPart) {
+		// A further part of a line's messages: appended to the first part.
+		entry = pendingAlerts.get(item.lineRef);
+		if (!entry) return;
+		entry.pages = entry.pages.concat(text);
+	} else {
+		entry = {
+			lineName: item.lineName,
+			count: item.alertCount || 0,
+			pages: text,
+			color: item.lineColor || "#888888",
+			textColor: item.lineTextColor || "#ffffff",
+			// Set when the last check failed: the messages (if any) are older.
+			stale: typeof item.staleReason === "string",
+		};
+	}
+	// Shown once every message is there (one per page).
+	if (entry.pages.length < entry.count) {
+		pendingAlerts.set(item.lineRef, entry);
+		return;
+	}
+	pendingAlerts.delete(item.lineRef);
+	const pages = entry.pages;
 	const previous = lineAlerts.get(item.lineRef);
-	lineAlerts.set(item.lineRef, {
-		lineName: item.lineName,
-		count: item.alertCount || 0,
-		pages: pages,
-		color: item.lineColor || "#888888",
-		textColor: item.lineTextColor || "#ffffff",
-		// Set when the last check failed: the messages (if any) are older.
-		stale: typeof item.staleReason === "string",
-	});
+	lineAlerts.set(item.lineRef, entry);
 	// New or ended messages on the line being read: back to its first page
 	// (the same messages sent again keep the page).
 	const current = items[selectedIndex];

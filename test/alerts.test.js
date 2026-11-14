@@ -74,23 +74,42 @@ test("pins for a message and for its end", () => {
 	assert.strictEqual(end.layout.subtitle, "Fin de perturbation");
 });
 
-test("alertTextFor orders messages ending soonest first, undated last", () => {
+test("alertChunks orders messages ending soonest first, undated last", () => {
 	const messages = [
 		{ id: "1", text: "c", validUntil: 300 },
 		{ id: "2", text: "n", validUntil: null },
 		{ id: "3", text: "a", validUntil: 100 },
 	];
-	assert.strictEqual(alerts.alertTextFor(messages), "a\nc\nn");
+	assert.deepStrictEqual(alerts.alertChunks(messages), ["a\nc\nn"]);
+	assert.deepStrictEqual(alerts.alertChunks([]), []);
 });
 
-test("alertTextFor keeps whole messages within the byte budget", () => {
+test("alertChunks splits whole messages over chunks within the byte budget, losing none", () => {
 	const long = "é".repeat(280); // 560 UTF-8 bytes
-	const messages = [1, 2, 3].map((i) => ({ id: String(i), text: long, validUntil: i }));
-	assert.strictEqual(alerts.alertTextFor(messages, 1500), `${long}\n${long}`);
+	const messages = [1, 2, 3, 4, 5].map((i) => ({ id: String(i), text: long, validUntil: i }));
+	const chunks = alerts.alertChunks(messages, 1500);
+	assert.deepStrictEqual(chunks, [`${long}\n${long}`, `${long}\n${long}`, long]);
+	assert.ok(chunks.every((c) => alerts.utf8Length(c) <= 1500));
+	assert.strictEqual(chunks.join("\n").split("\n").length, 5);
 });
 
-test("alertTextFor always keeps the first message", () => {
-	const text = "x".repeat(600);
-	assert.strictEqual(alerts.alertTextFor([{ id: "1", text: text, validUntil: null }], 100), text);
-	assert.strictEqual(alerts.alertTextFor([]), "");
+test("a message cut at MAX_TEXT never ends with half an emoji", () => {
+	const raw = `${"a".repeat(alerts.MAX_TEXT - 2)}🚧x`;
+	const body = {
+		Siri: { ServiceDelivery: { GeneralMessageDelivery: [{ InfoMessage: [{
+			InfoChannelRef: { value: "Perturbation" },
+			InfoMessageIdentifier: { value: "m1" },
+			Content: { Message: [{ MessageType: "SHORT_MESSAGE", MessageText: { value: raw } }] },
+		}] }] } },
+	};
+	const [message] = alerts.parseGeneralMessages(body, "L");
+	assert.ok(!/[\uD800-\uDBFF]…$/.test(message.text));
+	assert.doesNotThrow(() => encodeURIComponent(message.text));
+	assert.deepStrictEqual(alerts.alertChunks([message, { ...message, id: "m2" }]).length, 1);
+});
+
+test("utf8Length counts like UTF-8 and tolerates a lone surrogate", () => {
+	assert.strictEqual(alerts.utf8Length("aé🚧"), 1 + 2 + 4);
+	assert.strictEqual(alerts.utf8Length("a\uD83D"), 4);
+	assert.strictEqual(alerts.utf8Length("€"), 3);
 });

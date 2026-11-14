@@ -73,7 +73,8 @@
 			"alertCount",
 			"alertText",
 			"autoOpen",
-			"screens"
+			"screens",
+			"alertPart"
 		],
 		"resources": {
 			"media": [

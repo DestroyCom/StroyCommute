@@ -289,6 +289,25 @@ test("alerts: the watch gets every message whole, ordered, with the line's colou
 	phone.restore();
 });
 
+test("alerts: messages beyond one AppMessage follow as further parts, none lost", () => {
+	const phone = loadPhone({ storage: new Map([["stroycommuteConfig", JSON.stringify(ALERT_CONFIG)]]) });
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	const ids = ["1", "2", "3", "4", "5", "6"];
+	const answer = gmAnswer("STIF:Line::C01743:", ids);
+	for (const message of answer.Siri.ServiceDelivery.GeneralMessageDelivery[0].InfoMessage) {
+		message.Content.Message[0].MessageText.value = `${message.InfoMessageIdentifier.value} ${"é".repeat(270)}`;
+	}
+	answerAlerts(phone, { "STIF:Line::C01743:": answer });
+	phone.advance(5000);
+	const parts = phone.sent.filter((m) => m.itemType === "alertUpdate" && m.lineRef === "STIF:Line::C01743:");
+	assert.ok(parts.length > 1);
+	assert.deepStrictEqual(parts.map((p) => p.alertPart || 0), parts.map((_p, i) => i));
+	assert.ok(parts.every((p) => p.alertCount === 6 && Buffer.byteLength(p.alertText) <= 1500));
+	const texts = parts.map((p) => p.alertText).join("\n").split("\n");
+	assert.deepStrictEqual(texts.map((t) => t.split(" ")[0]), ids);
+	phone.restore();
+});
+
 test("the screens setting reaches the watch", () => {
 	for (const [screens, expected] of [["alerts", 2], ["stops", 1], [undefined, 0], ["nonsense", 0]]) {
 		const config = { ...CONFIG, screens: screens };

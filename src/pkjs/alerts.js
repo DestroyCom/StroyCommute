@@ -54,7 +54,12 @@ function cleanText(text) {
 		.replace(/\s*\n\s*/g, " ")
 		.replace(/ {2,}/g, " ")
 		.trim();
-	return flat.length > MAX_TEXT ? `${flat.slice(0, MAX_TEXT - 1)}…` : flat;
+	if (flat.length <= MAX_TEXT) return flat;
+	// Never cut an emoji (a surrogate pair) in half.
+	let end = MAX_TEXT - 1;
+	const last = flat.charCodeAt(end - 1);
+	if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+	return `${flat.slice(0, end)}…`;
 }
 
 /**
@@ -182,9 +187,26 @@ function endPin(id, lineName, text, now, texts) {
 	};
 }
 
-/** @param {string} s @returns {number} Its length in UTF-8 bytes. */
+/**
+ * @param {string} s
+ * @returns {number} Its length in UTF-8 bytes (a lone surrogate counts as
+ *   the 3-byte replacement character, without throwing).
+ */
 function utf8Length(s) {
-	return unescape(encodeURIComponent(s)).length;
+	let bytes = 0;
+	for (let i = 0; i < s.length; i++) {
+		const c = s.charCodeAt(i);
+		if (c < 0x80) bytes += 1;
+		else if (c < 0x800) bytes += 2;
+		else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+			const next = s.charCodeAt(i + 1);
+			if (next >= 0xdc00 && next <= 0xdfff) {
+				bytes += 4;
+				i += 1;
+			} else bytes += 3;
+		} else bytes += 3;
+	}
+	return bytes;
 }
 
 /**
@@ -192,12 +214,13 @@ function utf8Length(s) {
  *   line's messages.
  * @param {number} [maxBytes] - The watch's AppMessage inbox fits one
  *   alertUpdate of about 2 KB: 1500 bytes of text leave room for the rest.
- * @returns {string} Their texts, the message ending soonest first (usually
+ * @returns {string[]} Their texts, the message ending soonest first (usually
  *   what is happening now rather than works announced weeks ahead; no end
- *   date last), joined with "\n", whole messages only while the total stays
- *   within `maxBytes`. The first message is always there.
+ *   date last), joined with "\n" into chunks of whole messages that each
+ *   stay within `maxBytes` (a message is at most MAX_TEXT characters, so it
+ *   always fits alone). Every message is in one chunk; [] without messages.
  */
-function alertTextFor(messages, maxBytes) {
+function alertChunks(messages, maxBytes) {
 	const budget = maxBytes || 1500;
 	const ordered = (messages || [])
 		.map((m, i) => ({ m: m, i: i }))
@@ -213,17 +236,24 @@ function alertTextFor(messages, maxBytes) {
 			return ua === ub ? a.i - b.i : ua - ub;
 		})
 		.map((x) => x.m.text);
+	const chunks = [];
 	let text = "";
 	for (const message of ordered) {
 		const next = text ? `${text}\n${message}` : message;
-		if (text && utf8Length(next) > budget) break;
-		text = next;
+		if (text && utf8Length(next) > budget) {
+			chunks.push(text);
+			text = message;
+		} else {
+			text = next;
+		}
 	}
-	return text;
+	if (text) chunks.push(text);
+	return chunks;
 }
 
 module.exports = {
-	alertTextFor: alertTextFor,
+	utf8Length: utf8Length,
+	alertChunks: alertChunks,
 	MAX_TEXT: MAX_TEXT,
 	parseGeneralMessages: parseGeneralMessages,
 	alertLines: alertLines,

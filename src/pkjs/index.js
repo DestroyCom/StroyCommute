@@ -2657,29 +2657,41 @@ function afterAlertRefresh(config, lines, cache, previous, failed) {
 		}
 	}
 
-	// One alertUpdate per line: its messages whole, most urgent first
-	// (alertTextFor), with the line's colours from a tracked stop on it.
-	sendItemsSequentially(
-		lines.map((line) => {
-			const entry = kept[line.lineRef];
-			const messages = entry ? entry.messages : [];
-			const item = {
+	// One alertUpdate per line: its messages whole, most urgent first, with
+	// the line's colours from a tracked stop on it. Messages beyond what one
+	// AppMessage holds follow in more alertUpdates (alertPart 1, 2...), which
+	// the watch appends until it has alertCount messages.
+	const updates = [];
+	for (const line of lines) {
+		const entry = kept[line.lineRef];
+		const messages = entry ? entry.messages : [];
+		const chunks = alerts.alertChunks(messages);
+		const item = {
+			itemType: "alertUpdate",
+			lineRef: line.lineRef,
+			lineName: line.lineName,
+			alertCount: messages.length,
+		};
+		// The messages (if any) are from an earlier check.
+		if (failed[line.lineRef]) item.staleReason = failed[line.lineRef];
+		if (chunks.length) item.alertText = chunks[0];
+		const stop = config.trackedStops.find((s) => s.lineRef === line.lineRef);
+		if (stop) {
+			const colors = watchLineColors(stop.lineColor, stop.lineTextColor);
+			item.lineColor = colors.color;
+			item.lineTextColor = colors.textColor;
+		}
+		updates.push(item);
+		for (let part = 1; part < chunks.length; part++) {
+			updates.push({
 				itemType: "alertUpdate",
 				lineRef: line.lineRef,
 				lineName: line.lineName,
 				alertCount: messages.length,
-			};
-			// The messages (if any) are from an earlier check.
-			if (failed[line.lineRef]) item.staleReason = failed[line.lineRef];
-			if (messages.length) item.alertText = alerts.alertTextFor(messages);
-			const stop = config.trackedStops.find((s) => s.lineRef === line.lineRef);
-			if (stop) {
-				const colors = watchLineColors(stop.lineColor, stop.lineTextColor);
-				item.lineColor = colors.color;
-				item.lineTextColor = colors.textColor;
-			}
-			return item;
-		}),
-		0
-	);
+				alertPart: part,
+				alertText: chunks[part],
+			});
+		}
+	}
+	sendItemsSequentially(updates, 0);
 }
