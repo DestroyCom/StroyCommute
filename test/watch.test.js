@@ -432,6 +432,26 @@ test("a message too long for the screen goes on more pages, cut at spaces", asyn
 	watch.restore();
 });
 
+test("a word longer than a line (a long URL) is cut so every part is reachable", async () => {
+	for (const screen of [undefined, { width: 260, height: 260, round: true }]) {
+		const watch = await started(undefined, screen ? { screen } : undefined);
+		const url = `https://www.transilien.com/${"x".repeat(240)}`;
+		watch.deliver({ ...ALERT2, alertCount: 1, alertText: url });
+		watch.press("down");
+		const total = Number(/1\/(\d+)$/.exec(watch.screen()[0])[1]);
+		assert.ok(total > 1);
+		const pages = [];
+		for (let i = 0; i < total; i++) {
+			pages.push(watch.screen()[2]);
+			watch.press("select");
+		}
+		// Broken with "\n" where a line ends (Piu doesn't break inside a word).
+		assert.strictEqual(pages.join("").replace(/\n/g, ""), url);
+		assert.ok(pages.join("").includes("\n"));
+		watch.restore();
+	}
+});
+
 test("leaving the screen or new messages bring the alert back to its first page", async () => {
 	const watch = await onAlertScreen();
 	watch.press("select");
