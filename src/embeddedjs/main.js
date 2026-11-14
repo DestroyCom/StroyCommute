@@ -30,6 +30,7 @@ const STRINGS = {
 		quotaUnknown: "PRIM quota: unknown",
 		noAlert: "No disruption",
 		alertsUnavailable: "Traffic info unavailable",
+		alertsStale: "Not up to date",
 		noDeparture: "No known departure",
 		nextAlert: "Select: next",
 		trafficInfoCount: "Traffic info: {n}",
@@ -57,6 +58,7 @@ const STRINGS = {
 		quotaUnknown: "Quota PRIM : inconnu",
 		noAlert: "Pas de perturbation",
 		alertsUnavailable: "Info trafic indisponible",
+		alertsStale: "Info pas à jour",
 		noDeparture: "Plus de départ connu",
 		nextAlert: "Select : suivante",
 		trafficInfoCount: "Info trafic : {n}",
@@ -1178,7 +1180,12 @@ function describeScreen() {
 		};
 		if (pages.length > 0) {
 			model.body = pages[Math.min(alertPage, pages.length - 1)];
-			model.footer = pages.length > 1 ? t("nextAlert") : "";
+			// The last check failed: say these messages may be out of date.
+			model.footer = info.stale
+				? t("alertsStale")
+				: pages.length > 1
+					? t("nextAlert")
+					: "";
 		} else {
 			model.line = !info
 				? "..."

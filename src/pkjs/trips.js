@@ -257,6 +257,24 @@ function decideCallGuard(state, settings, now, count) {
 }
 
 /**
+ * @param {?object} state - The stored guard state.
+ * @param {object} [settings] - The user's raw `callGuard` settings.
+ * @param {number} now
+ * @returns {number} How many PRIM calls fit now without starting a pause:
+ *   0 during a pause, Infinity when the guard is off.
+ */
+function callGuardRoom(state, settings, now) {
+	const s = normalizeCallGuard(settings);
+	if (s.maxCalls === 0) return Number.POSITIVE_INFINITY;
+	let pausedUntil = (state && state.pausedUntil) || 0;
+	if (pausedUntil - now > s.pauseMinutes * MINUTE_MS) pausedUntil = 0;
+	if (pausedUntil > now) return 0;
+	const windowStart = now - s.windowMinutes * MINUTE_MS;
+	const calls = ((state && state.calls) || []).filter((t) => t > windowStart);
+	return Math.max(0, s.maxCalls - calls.length);
+}
+
+/**
  * @param {object} [before] - Previously saved raw `callGuard` settings.
  * @param {object} [after] - Newly saved raw `callGuard` settings.
  * @returns {boolean} True when the effective (normalized) settings differ
@@ -303,5 +321,6 @@ module.exports = {
 	DEFAULT_CALL_GUARD: DEFAULT_CALL_GUARD,
 	normalizeCallGuard: normalizeCallGuard,
 	decideCallGuard: decideCallGuard,
+	callGuardRoom: callGuardRoom,
 	callGuardSettingsChanged: callGuardSettingsChanged,
 };

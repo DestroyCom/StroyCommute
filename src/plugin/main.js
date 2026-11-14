@@ -231,19 +231,26 @@ function propertiesOf(stop, times, texts, now) {
 
 // A departure this long past (ms) counts as left.
 const LEFT_AFTER_MS = 60000;
+// A train seen at the platform this long ago (ms) has most likely left.
+const AT_STOP_FOR_MS = 3 * 60000;
 
 /**
  * @param {?object} times - A trip's stored times.
  * @param {number} now
  * @returns {?object} The same without trains that have left: a following
  *   train takes the first one's place (its destination and mission aren't
- *   known, so they go), null when no known train is still to come.
+ *   known, so they go), null when no known train is still to come. A
+ *   cancelled train (cached by an older version) is never served.
  */
 function usableTimes(times, now) {
-	if (!times || times.atStop || typeof times.time !== "number") return times;
-	if (times.time >= now - LEFT_AFTER_MS) return times;
+	if (!times || times.cancelled) return null;
+	const left = times.atStop
+		? now - times.at > AT_STOP_FOR_MS
+		: typeof times.time === "number" && times.time < now - LEFT_AFTER_MS;
+	if (!left) return times;
 	if (typeof times.time2 === "number" && times.time2 >= now - LEFT_AFTER_MS) {
 		return Object.assign({}, times, {
+			atStop: false,
 			time: times.time2,
 			time2: null,
 			destination: "",

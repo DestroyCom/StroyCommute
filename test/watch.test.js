@@ -367,6 +367,16 @@ test("an alert screen shows one message under the line banner, Select shows the 
 	watch.restore();
 });
 
+test("cached messages from a failed check say they may be out of date", async () => {
+	const watch = await started();
+	watch.deliver({ ...ALERT2, staleReason: "network" });
+	watch.press("down");
+	assert.deepStrictEqual(watch.screen(), ["4  1/2", "Info pas à jour", "Premier message"]);
+	watch.deliver(ALERT2);
+	assert.deepStrictEqual(watch.screen(), ["4  1/2", "Select : suivante", "Premier message"]);
+	watch.restore();
+});
+
 test("a line's messages sent in parts are all reachable, shown once complete", async () => {
 	const watch = await started();
 	watch.deliver({ ...ALERT2, alertCount: 3, alertText: "Premier message\nSecond message" });

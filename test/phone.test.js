@@ -336,6 +336,31 @@ test("alerts: the call guard applies to traffic info too", () => {
 	phone.restore();
 });
 
+test("alerts: more lines than the call guard allows are checked in turns, without a pause", () => {
+	let now = Date.UTC(2026, 10, 13, 8);
+	const lines = ["A", "B", "C"].map((n) => ({ lineRef: `STIF:Line::${n}:`, lineName: n }));
+	const config = { ...ALERT_CONFIG, trackedLines: lines, trackedStops: [], callGuard: { maxCalls: 2, windowMinutes: 10, pauseMinutes: 15 } };
+	const storage = new Map([["stroycommuteConfig", JSON.stringify(config)]]);
+	const checked = () => phone.requests.filter((r) => /general-message/.test(r.url) && r.status === undefined).map((r) => decodeURIComponent(r.url.split("LineRef=")[1]));
+	let phone = loadPhone({ storage });
+	phone.setNow(now);
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	assert.deepStrictEqual(checked(), ["STIF:Line::A:", "STIF:Line::B:"]);
+	answerAlerts(phone, {});
+	phone.advance(2000);
+	const c = phone.sent.find((m) => m.itemType === "alertUpdate" && m.lineRef === "STIF:Line::C:");
+	assert.strictEqual(c.staleReason, "rateLimited");
+	assert.strictEqual(JSON.parse(storage.get("stroycommuteCallGuard")).pausedUntil, 0);
+	phone.restore();
+	// Next check, once the window has room again: C goes first.
+	now += 11 * 60000;
+	phone = loadPhone({ storage });
+	phone.setNow(now);
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	assert.strictEqual(checked()[0], "STIF:Line::C:");
+	phone.restore();
+});
+
 test("alerts: a failed fetch is reported as such, not as no disruption", () => {
 	const phone = loadPhone({ storage: new Map([["stroycommuteConfig", JSON.stringify(ALERT_CONFIG)]]) });
 	phone.fromWatch({ itemType: "refreshAlerts" });

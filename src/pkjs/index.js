@@ -1568,6 +1568,7 @@ const {
 	filterVisitsServingStop,
 	journeyMission,
 	decideCallGuard,
+	callGuardRoom,
 	callGuardSettingsChanged,
 	staleExtra,
 	journeyDestinationName,
@@ -2552,21 +2553,38 @@ function refreshAlerts() {
 		}
 	}
 	const now = Date.now();
-	const toFetch = lines.filter((line) => {
+	// Lines to check, the least recently checked (never first) first.
+	const age = (line) => {
 		const entry = cache[line.lineRef];
-		return !(entry && now - entry.at < ALERT_CACHE_MS);
-	});
+		return entry ? now - entry.at : Number.POSITIVE_INFINITY;
+	};
+	const due = lines
+		.filter((line) => age(line) >= ALERT_CACHE_MS)
+		.map((line, i) => ({ line: line, i: i }))
+		.sort((a, b) => {
+			const aa = age(a.line);
+			const ab = age(b.line);
+			return aa === ab ? a.i - b.i : ab > aa ? 1 : -1;
+		})
+		.map((x) => x.line);
 	// lineRef -> why its check failed ("rateLimited" or "network").
 	const failed = {};
 	const finish = () =>
 		afterAlertRefresh(config, lines, cache, previous, failed);
-	if (toFetch.length === 0) {
-		finish();
-		return;
-	}
 	// The user's call guard covers every PRIM call, traffic info included
-	// (the daily quotas stay per endpoint).
-	if (!checkCallGuard(config, toFetch.length).allowed) {
+	// (the daily quotas stay per endpoint). Only the calls that fit without
+	// starting a pause are made; the other lines wait for the next check,
+	// which takes them first since they are now the least recently checked.
+	const room = callGuardRoom(
+		readJson("stroycommuteCallGuard", null),
+		config.callGuard,
+		now
+	);
+	const toFetch = due.slice(0, room);
+	for (const line of due.slice(toFetch.length)) {
+		failed[line.lineRef] = "rateLimited";
+	}
+	if (toFetch.length === 0 || !checkCallGuard(config, toFetch.length).allowed) {
 		for (const line of toFetch) failed[line.lineRef] = "rateLimited";
 		finish();
 		return;

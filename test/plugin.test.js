@@ -203,6 +203,31 @@ test("a cancelled train is never served as a departure", async () => {
 	again.restore();
 });
 
+test("a cancelled train cached by an older version is not served", async () => {
+	const now = Date.UTC(2026, 10, 13, 8);
+	const key = `${STOP.stopRef}|${STOP.lineRef}|`;
+	const storage = withConfig();
+	storage.set("stroycommutePluginCache", JSON.stringify({ [key]: { at: now - 60000, cancelled: true, time: now + 5 * 60000, time2: null } }));
+	const plugin = loadPlugin({ storage, now, answer: () => null });
+	assert.deepStrictEqual((await plugin.read()).data.instances, []);
+	plugin.restore();
+});
+
+test("a train at the platform is not shown so for long without fresh data", async () => {
+	const now = Date.UTC(2026, 10, 13, 8);
+	const key = `${STOP.stopRef}|${STOP.lineRef}|`;
+	const storage = withConfig();
+	storage.set("stroycommutePluginCache", JSON.stringify({ [key]: { at: now - 60000, atStop: true, time: null, time2: now + 6 * 60000 } }));
+	const plugin = loadPlugin({ storage, now, answer: () => null });
+	assert.strictEqual((await plugin.read()).data.instances[0].properties.next.shortText.text, "À quai");
+	plugin.advance(3 * 60000); // seen at the platform 4 min ago, PRIM failing
+	const p = (await plugin.read()).data.instances[0].properties;
+	assert.strictEqual(p.next.shortText.text, "3 min");
+	plugin.advance(5 * 60000);
+	assert.deepStrictEqual((await plugin.read()).data.instances, []);
+	plugin.restore();
+});
+
 test("a train that has left is not served: the following one takes its place, else nothing", async () => {
 	const plugin = loadPlugin({ storage: withConfig(), answer: (url) => (url ? siriAnswer(Date.UTC(2026, 10, 13, 8), [1, 6]) : null) });
 	await plugin.read();
