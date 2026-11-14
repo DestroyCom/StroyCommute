@@ -336,3 +336,64 @@ test("with auto-open, one wakeup at the next schedule start, none without", asyn
 	assert.strictEqual(watch.wakeups.size, 0);
 	watch.restore();
 });
+
+const ALERT2 = {
+	itemType: "alertUpdate",
+	lineRef: STOP.lineRef,
+	lineName: "4",
+	alertCount: 2,
+	alertText: "Premier message\nSecond message",
+	lineColor: "#5291CE",
+	lineTextColor: "#FFFFFF",
+};
+
+/** Boots on one stop with ALERT2 delivered, on the line's alert screen. */
+async function onAlertScreen() {
+	const watch = await started();
+	watch.deliver(ALERT2);
+	watch.press("down");
+	return watch;
+}
+
+// watch.screen() lists the contents in tree order: banner, ..., footer, body.
+test("an alert screen shows one message under the line banner, Select shows the next", async () => {
+	const watch = await onAlertScreen();
+	assert.deepStrictEqual(watch.screen(), ["4  1/2", "Select : suivante", "Premier message"]);
+	assert.strictEqual(watch.bannerColor(), "#5291CE");
+	watch.press("select");
+	assert.deepStrictEqual(watch.screen(), ["4  2/2", "Select : suivante", "Second message"]);
+	watch.press("select");
+	assert.strictEqual(watch.screen()[0], "4  1/2");
+	watch.restore();
+});
+
+test("leaving the screen or new messages bring the alert back to its first page", async () => {
+	const watch = await onAlertScreen();
+	watch.press("select");
+	watch.press("down");
+	watch.press("up");
+	assert.strictEqual(watch.screen()[0], "4  1/2");
+	watch.press("select");
+	watch.deliver({ ...ALERT2, alertCount: 1, alertText: "Nouveau" });
+	assert.deepStrictEqual(watch.screen(), ["4", "Nouveau"]);
+	watch.restore();
+});
+
+test("the same messages sent again keep the page being read", async () => {
+	const watch = await onAlertScreen();
+	watch.press("select");
+	watch.deliver(ALERT2);
+	assert.strictEqual(watch.screen()[0], "4  2/2");
+	watch.restore();
+});
+
+test("Select still refreshes a stop", async () => {
+	const watch = await started();
+	watch.deliver(ALERT2);
+	watch.deliver(OK);
+	watch.advance(1600);
+	const before = watch.sent.filter((m) => m.itemType === "refreshStop").length;
+	watch.press("select");
+	assert.strictEqual(watch.sent.filter((m) => m.itemType === "refreshStop").length, before + 1);
+	watch.restore();
+});

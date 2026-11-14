@@ -29,6 +29,7 @@ const STRINGS = {
 		quotaRemaining: "PRIM quota: {n} left",
 		quotaUnknown: "PRIM quota: unknown",
 		noAlert: "No disruption",
+		nextAlert: "Select: next",
 		trafficInfoCount: "Traffic info: {n}",
 		phoneDisconnected: "Phone disconnected",
 	},
@@ -53,6 +54,7 @@ const STRINGS = {
 		quotaRemaining: "Quota PRIM : {n} restant(s)",
 		quotaUnknown: "Quota PRIM : inconnu",
 		noAlert: "Pas de perturbation",
+		nextAlert: "Select : suivante",
 		trafficInfoCount: "Info trafic : {n}",
 		phoneDisconnected: "Téléphone déconnecté",
 	},
@@ -598,14 +600,35 @@ function startAlertTimer() {
 
 /** @param {object} item - A decoded alertUpdate. */
 function handleAlertUpdate(item) {
+	const pages = item.alertText ? String(item.alertText).split("\n") : [];
+	const previous = lineAlerts.get(item.lineRef);
 	lineAlerts.set(item.lineRef, {
 		lineName: item.lineName,
 		count: item.alertCount || 0,
-		text: item.alertText || "",
+		pages: pages,
+		color: item.lineColor || "#888888",
+		textColor: item.lineTextColor || "#ffffff",
 	});
+	// New or ended messages on the line being read: back to its first page
+	// (the same messages sent again keep the page).
+	const current = items[selectedIndex];
+	const changed = !previous || previous.pages.join("\n") !== pages.join("\n");
+	// biome-ignore lint/complexity/useOptionalChain: see requestRefresh
+	if (
+		changed &&
+		current &&
+		current.type === "alert" &&
+		current.lineRef === item.lineRef
+	) {
+		alertPage = 0;
+	}
 	rebuildItems();
 	render();
 }
+
+// Message shown on an alert screen (Select pages through a line's
+// messages); back to 0 when the screen changes.
+let alertPage = 0;
 
 /** Rebuilds the item list, staying on the item that was on screen. */
 function rebuildItems() {
@@ -1081,13 +1104,23 @@ function describeScreen() {
 		return model;
 	}
 	if (item.type === "alert") {
+		// Like a stop: the line's banner, then one whole message per page.
 		const info = lineAlerts.get(item.lineRef);
-		model.title = item.lineName;
-		if (info && info.count > 0) {
-			model.body = info.text;
-			model.footer = ""; // the text uses the whole screen
-		} else if (info) model.line = t("noAlert");
-		else model.line = "...";
+		const pages = info ? info.pages : [];
+		model.banner = {
+			color: info ? info.color : "#888888",
+			textColor: info ? info.textColor : "#ffffff",
+			text:
+				pages.length > 1
+					? `${item.lineName}  ${alertPage + 1}/${pages.length}`
+					: item.lineName,
+		};
+		if (pages.length > 0) {
+			model.body = pages[Math.min(alertPage, pages.length - 1)];
+			model.footer = pages.length > 1 ? t("nextAlert") : "";
+		} else {
+			model.line = info ? t("noAlert") : "...";
+		}
 		return model;
 	}
 
@@ -1196,7 +1229,18 @@ class MainBehavior extends Behavior {
 		if (this.selectDown) return true;
 		this.selectDown = true;
 		note("btn select");
-		run("onPressSelect", () => requestRefresh(true));
+		run("onPressSelect", () => {
+			const item = items[selectedIndex];
+			const info =
+				// biome-ignore lint/complexity/useOptionalChain: see requestRefresh
+				item && item.type === "alert" ? lineAlerts.get(item.lineRef) : null;
+			if (info && info.pages.length > 1) {
+				alertPage = (alertPage + 1) % info.pages.length;
+				render();
+				return;
+			}
+			requestRefresh(true);
+		});
 		return true;
 	}
 	onReleaseSelect() {
@@ -1212,6 +1256,7 @@ class MainBehavior extends Behavior {
 	step(direction) {
 		if (items.length === 0) return;
 		selectedIndex = (selectedIndex + direction + items.length) % items.length;
+		alertPage = 0;
 		render();
 		requestRefresh(false);
 	}
@@ -1246,7 +1291,7 @@ const LAYOUT = ROUND
 			// 160 px wide, in 14 px (see createView): the circle is too narrow
 			// lower down for the hints in 18 px.
 			footer: [216, 50],
-			body: [72, 28, 150],
+			body: [82, 28, 130],
 		}
 	: {
 			banner: { top: 0, height: 44, inset: 8 },
@@ -1256,7 +1301,7 @@ const LAYOUT = ROUND
 			next: [150, 8],
 			alert: [178, 8],
 			footer: [200, 8],
-			body: [42, 6, 184],
+			body: [48, 6, 150],
 		};
 
 /** @returns {Label} A hidden single-line label at LAYOUT[name]. */
