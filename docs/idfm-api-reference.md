@@ -148,28 +148,64 @@ northbound ones (Châtelet Les Halles) from B to A. Same SIRI producer
   if only one line is wanted, or pass `LineRef` directly as a query
   parameter.
 
-## Traffic alerts — TODO
+## Traffic alerts — `general-message` (verified 2026-11-13)
 
-The `general-message` PRIM endpoint (line/network disruptions) is used
-by the StroyCommute traffic-alerts subsystem, but its JSON response
-shape has never been captured in this repo — unlike `stop-monitoring`
-above, there is no real payload example to work from. Per the project
-rule against guessing API shapes, `fetchLineAlerts()` in
-`src/embeddedjs/main.js` is a stub (returns `[]`) until this is fixed.
+```
+GET https://prim.iledefrance-mobilites.fr/marketplace/general-message?LineRef=STIF:Line::<ID_Line>:
+```
 
-Before implementing it for real:
+Same `apiKey` header. SIRI Lite GeneralMessage, small (1-5 KB per line).
+Real captures: `test/fixtures/gm-rer-b.json` (RER B, 4 messages, one
+shared with lines 12/13), `test/fixtures/gm-m4.json` (metro 4, 1 message),
+`test/fixtures/gm-empty.json` (no message). Shape:
 
-1. Register/confirm PRIM access to the `general-message` endpoint
-   (separate from `stop-monitoring`).
-2. Fetch one real response for a line currently under disruption and
-   paste the raw JSON into this file, in the same style as the
-   `stop-monitoring` example above.
-3. Map the real fields to the `configLine`/`alertForTimeline`
-   AppMessage shapes documented in
-   `docs/superpowers/specs/2026-08-17-stroycommute-scaffold-design.md`.
-4. Update `docs/pebble-idfm-prim/SKILL.md` and this file once verified.
+```json
+{"Siri": {"ServiceDelivery": {"GeneralMessageDelivery": [{
+  "Status": "true",
+  "InfoMessage": [{
+    "FormatRef": "STIF-IDF",
+    "RecordedAtTime": "2026-10-11T16:01:06.127Z",
+    "ItemIdentifier": "RATP-SIV:Item::MSG.IVC.3931571241858955870.1:LOC",
+    "InfoMessageIdentifier": {"value": "RATP-SIV:InfoMessage::MSG.IVC.3931571241858955870:LOC"},
+    "InfoChannelRef": {"value": "Perturbation"},
+    "ValidUntilTime": "2026-12-20T03:30:00.000Z",
+    "Content": {
+      "LineRef": [{"value": "STIF:Line::C01374:"}],
+      "Message": [
+        {"MessageType": "SHORT_MESSAGE", "MessageText": {"value": "Jusqu'au 19 décembre inclus, l'arrêt n'est pas desservi à Saint-Michel (travaux de rénovation)", "lang": "fr"}},
+        {"MessageType": "TEXT_ONLY", "MessageText": {"value": "...same, longer...", "lang": "fr"}}
+      ]
+    }
+  }]
+}]}}}
+```
 
-## Quotas (as of 2024, to re-verify at implementation time)
+- `InfoMessageIdentifier.value` is stable across calls: the key used to
+  detect new and ended messages.
+- No start time and no severity: planned works ("Du 30 novembre au...")
+  and current disruptions look alike; dates are only in the text.
+  `ValidUntilTime` is when the message stops being published.
+- Texts are French only, may contain `\n`, emoji and thin spaces (U+2006).
+  `SHORT_MESSAGE` is the one to show on the watch, `TEXT_ONLY` the fallback.
+- `InfoChannelRef` seen: `Perturbation` only (an `InfoChannelRef=Information`
+  query returned no message).
+
+Not used: the Navitia line reports
+(`/marketplace/v2/navitia/line_reports/lines/line:IDFM:<id>/line_reports`)
+carry status/severity/application periods, but weigh ~1.6 MB per line (no
+effect of `disable_geojson`) and, for the RER B, 111 of 112 "active"
+disruptions were elevator outages with the same severity.
+
+## Quotas (verified 2026-11-13 from response headers)
+
+Every PRIM response carries the key's quota for that endpoint:
+`X-Ratelimit-Limit-Day`, `X-Ratelimit-Remaining-Day` (also
+`Ratelimit-Limit`/`Ratelimit-Remaining`/`Ratelimit-Reset`, seconds until the
+reset, which happens at 00:00 UTC). Each endpoint has its own quota: with a
+recent token, 1,000/day for `stop-monitoring` and 1,000/day for
+`general-message`, counted separately.
+
+Older notes (as of 2024):
 
 - Tokens generated before March 13, 2024: 100 req/s, 1,000,000 req/day.
 - More recent tokens: 5 req/s, 1,000 req/day.

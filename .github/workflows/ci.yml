@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   check:
@@ -21,3 +22,23 @@ jobs:
       - run: pnpm lint
       - run: pnpm check:config
       - run: pnpm test
+
+  # Builds the .pbw with the same pinned SDK as the Release workflow, so a
+  # change that breaks the watch build fails here rather than at release
+  # time. The .pbw is kept as an artifact to sideload and try on a watch.
+  build:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: ./.github/actions/setup-pebble
+      - run: pebble build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StroyCommute-pbw
+          path: build/*.pbw
+          if-no-files-found: error
+          retention-days: 14

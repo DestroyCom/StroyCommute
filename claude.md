@@ -39,10 +39,15 @@ And the Pebble framework docs and reference:
 - `src/pkjs/` : phone code — config page open/persist, PRIM API fetch (via
   native `XMLHttpRequest`, no proxy needed — pkjs is close enough to a
   regular JS/Node environment for this) triggered by watch-sent
-  `refreshStop` requests, SIRI Lite parsing, UTC→minutes conversion,
-  Pebble Timeline pin push. `@moddable/pebbleproxy` wiring is still present
-  (Task 3) but currently unused by the departures feature — kept in case a
-  future feature needs embeddedjs-side networking.
+  `refreshStop` requests, SIRI Lite parsing, UTC→minutes conversion.
+  `@moddable/pebbleproxy` is **required** even though the watch makes no
+  network request itself: when the first `pebble/message` `Message` is
+  created, the watch sends a "ready" message (key 15025) and stays
+  unable to write (`write()` throws "not writable") until the phone sends
+  something back — the proxy's `readyReceived` is what answers it. Keep
+  `Pebble.addEventListener("ready", moddableProxy.readyReceived)` and the
+  `appMessageReceived` check (verified in the Moddable sources,
+  `build/devices/pebble/modules/message/pebble-appmessage.c`).
 - **PRIM fetch architecture** (revised 2026-08-18, see
   `.superpowers/sdd/2026-08-17-stroycommute-scaffold/progress.md`'s Task 7
   section for the full investigation): originally speced with `fetch()`
@@ -99,10 +104,30 @@ files under `/mnt/d`.
   embeddedjs (it's the only side that reliably knows the app is
   foregrounded) even though the actual fetch now happens in pkjs: the
   timer sends a `refreshStop` request per tracked stop, pkjs replies with
-  a `departureUpdate`. Do not move the timer to pkjs — pkjs runs whenever
-  the phone has Bluetooth connectivity, independent of whether this
-  watchapp is open, so a pkjs-side timer would poll PRIM in the background
-  and violate this rule.
+  a `departureUpdate`. Do not move the timer to pkjs: pkjs is started and
+  stopped with the watchapp, so it can't run anything while the app is
+  closed, and the watch side is what knows which stop is on screen.
+  Nothing of this app runs in the background: timeline pins
+  (`Pebble.insertTimelinePin`, local pins only — the timeline web API is
+  gone) and `Pebble.showSimpleNotificationOnPebble` only work while pkjs
+  runs, i.e. while the app is open. To do work at a given time with the app
+  closed, schedule a watch wakeup (`pebble/wakeup`), which relaunches the
+  app.
+  The one exception is the app's plugin (`src/plugin/`, Pebble app plugins
+  preview): it runs while a watchface or Index reads its
+  `transit/departure` source, possibly all day. It has its own quota
+  budget, which must stay at least this strict: shared call guard and
+  daily count, one fetch per trip per 2 minutes, 3 trips at most, no fetch
+  under 300 calls left for the day, off when `pluginEnabled` is false.
+  `src/plugin/plugin.js` is generated (`npm run sync:plugin`, checked in
+  CI by `check:config`) from `src/plugin/main.js` and `src/pkjs/trips.js`:
+  never edit it by hand.
+  The Pebble app's plugin runtime differs from the emulator's (confirmed on
+  a real phone, 2026-11-14): `setTimeout` throws ("setTimeout is not
+  available to plugins") although the emulator provides it, and a plugin
+  session is torn down as soon as it responds, so `console.log` calls in
+  callbacks that run after the response never show in `pebble logs`.
+  `test/plugin.test.js` fakes `setTimeout` as throwing, like the phone.
 - All date/time conversion (UTC → minutes remaining) happens in pkjs,
   since that's where the raw SIRI response now arrives (also matches
   `docs/idfm-api-reference.md`'s original note that this conversion
@@ -118,6 +143,53 @@ files under `/mnt/d`.
 - Explicitly handle these states on the watch side: data OK, network
   error, stop with no real-time data available (not an error), quota
   exceeded (HTTP 429).
+
+## Pinned tooling versions
+
+The Pebble SDK and `pebble-tool` versions used by CI and releases are
+pinned in `.github/actions/setup-pebble/action.yml` (`sdk-version`,
+`pebble-tool-version`), on purpose: an SDK update can change how the app
+behaves (SDK 4.44 started requiring `usesPermissions` for phone-side
+network access, without which PRIM requests are refused).
+
+Check for updates regularly — at the start of each session, and before
+preparing a release:
+
+- `pebble-tool`: latest on PyPI,
+  `curl -s https://pypi.org/pypi/pebble-tool/json | jq -r .info.version`.
+- SDK: `pebble sdk list` ("Available SDKs"), and the changelogs at
+  `https://developer.repebble.com/sdk/changelogs/<version>/`.
+
+When a newer version exists, tell the user (in French) without being
+asked: which version, what its changelog says, and your assessment — should
+we update now, later, or skip it, and why (fixes or features we'd use,
+breaking changes, new requirements on `package.json`, risk for the app on
+the watch). Don't update on your own. Once the user agrees: change the
+pinned version, run `pebble build` locally with that version and read the
+build warnings, run the CI build, and add a `CHANGELOG.md` entry only if
+users will notice the difference.
+
+## Changelog
+
+`CHANGELOG.md` is the source of the release notes: the Release workflow
+(`scripts/release-notes.js`) moves its `[Unreleased]` section under the new
+version and turns it into the GitHub release body and the plain text pasted
+into the appstore. Keeping it up to date is Claude's job, not the user's:
+
+- Every time you change something a user of the app can notice (new
+  feature, behaviour change, fix, performance, permissions, settings page),
+  add one entry under `## [Unreleased]`, in the same change/commit.
+- Put it under `### New`, `### Improvements` or `### Fixes`
+  (create the heading if missing, in that order).
+- Write it in English, as one sentence for app users, not developers: what
+  changes for them, not how it was implemented. No file names, function
+  names or commit jargon.
+- If a change refines an entry already under `[Unreleased]`, update that
+  entry instead of adding another.
+- Purely internal changes (refactors, tests, CI, docs, tooling) get no
+  entry, unless they change something users see.
+- Never edit the sections of released versions, and never bump the version
+  in `package.json` by hand: the Release workflow does both.
 
 ## Code style
 

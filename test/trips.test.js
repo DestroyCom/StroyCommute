@@ -72,3 +72,54 @@ test("journeyMission reads JourneyNote, empty string otherwise", () => {
 	assert.strictEqual(journeyMission({}), "");
 	assert.strictEqual(journeyMission({ JourneyNote: [] }), "");
 });
+
+test("rankDepartures: a train at the platform comes before one whose time has just passed", () => {
+	const { rankDepartures } = require("../src/pkjs/trips");
+	const now = Date.UTC(2026, 10, 14, 8);
+	const visit = (offsetMin, extra) => ({
+		MonitoredVehicleJourney: {
+			MonitoredCall: Object.assign({ ExpectedDepartureTime: new Date(now + offsetMin * 60000).toISOString() }, extra),
+		},
+	});
+	const ranked = rankDepartures(
+		[visit(5), visit(-2), visit(1, { VehicleAtStop: true }), visit(3, { DepartureStatus: "cancelled" }), visit(5.4)],
+		now
+	);
+	assert.deepStrictEqual(
+		ranked.map((d) => [d.atStop, d.cancelled, Math.round((d.timeMs - now) / 6000) / 10]),
+		[
+			[true, false, 1],
+			[false, false, -2],
+			[false, false, 5],
+			[false, false, 5.4],
+			[false, true, 3],
+		]
+	);
+});
+
+test("rankDepartures: a train still at the platform over a minute past its time has left", () => {
+	const { rankDepartures } = require("../src/pkjs/trips");
+	const now = Date.UTC(2026, 10, 14, 8);
+	const visit = (offsetMin, extra) => ({
+		MonitoredVehicleJourney: {
+			MonitoredCall: Object.assign({ ExpectedDepartureTime: new Date(now + offsetMin * 60000).toISOString() }, extra),
+		},
+	});
+	const ranked = rankDepartures(
+		[
+			visit(-2, { VehicleAtStop: true }), // PRIM lagging: gone
+			visit(-0.5, { VehicleAtStop: true }), // just past: still there
+			visit(6),
+		],
+		now
+	);
+	assert.deepStrictEqual(
+		ranked.map((d) => [d.atStop, Math.round((d.timeMs - now) / 6000) / 10]),
+		[
+			[true, -0.5],
+			[false, 6],
+		]
+	);
+	// An at-platform train without any time is kept.
+	assert.strictEqual(rankDepartures([visit(0, { ExpectedDepartureTime: undefined, VehicleAtStop: true })], now).length, 1);
+});

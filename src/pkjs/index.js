@@ -63,6 +63,9 @@ const CONFIG_HTML = `<!DOCTYPE html>
   .moveButtons { display: flex; gap: 6px; margin-right: auto; }
   .moveBtn { background: #444; padding: 8px 14px; font-size: 15px; line-height: 1; }
   .moveBtn:disabled { opacity: 0.3; }
+  #diagText { width: 100%; margin-top: 8px; padding: 8px; font-family: monospace; font-size: 12px; background: #111; color: #ddd; border: 1px solid #444; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .optionRow { display: block; margin-top: 10px; }
+  .diagButtons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -101,14 +104,21 @@ const CONFIG_HTML = `<!DOCTYPE html>
     <div id="directionPicker"></div>
   </fieldset>
 
-  <!-- Traffic alerts aren't implemented yet (fetchLineAlerts() is a stub on
-       the watch) -- hidden until they are, see ALERTS_ENABLED below. -->
+  <!-- Traffic alerts (PRIM general-message, fetched by pkjs). Hidden when
+       ALERTS_ENABLED below is false. -->
   <div id="alertsSection" hidden>
     <fieldset>
       <legend data-i18n="linesLegend">Lignes suivies (alertes trafic)</legend>
       <div id="linesList"></div>
       <input type="text" id="lineSearchInput" data-i18n-placeholder="lineSearchPlaceholder" placeholder="Rechercher une ligne (ex : 4, RER A)" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceSearch('line')" disabled>
       <div id="lineSearchResults" class="searchResults"></div>
+      <div class="searchStatus" data-i18n="linesHint">Les lignes de tes arrêts suivis sont surveillées automatiquement. Ajoute ici d'autres lignes à surveiller.</div>
+      <label class="optionRow" for="screens" data-i18n="screensLabel">Écrans sur la montre</label>
+      <select id="screens">
+        <option value="both" data-i18n="screensBoth">Arrêts et alertes</option>
+        <option value="stops" data-i18n="screensStops">Arrêts seulement</option>
+        <option value="alerts" data-i18n="screensAlerts">Alertes seulement</option>
+      </select>
     </fieldset>
 
     <fieldset>
@@ -126,11 +136,15 @@ const CONFIG_HTML = `<!DOCTYPE html>
         <label><span data-i18n="scheduleStart">Début</span> <input type="time" id="scheduleStart" value="07:00"></label>
         <label><span data-i18n="scheduleEnd">Fin</span> <input type="time" id="scheduleEnd" value="19:30"></label>
       </div>
+      <label class="optionRow"><input type="checkbox" id="notifyAlerts" checked> <span data-i18n="notifyLabel">Me notifier sur la montre d'une nouvelle perturbation pendant ce créneau</span></label>
+      <label class="optionRow"><input type="checkbox" id="autoOpen"> <span data-i18n="autoOpenLabel">Ouvrir l'app au début du créneau</span></label>
+      <div class="searchStatus" data-i18n="alertsHint">Les alertes sont vérifiées quand l'app est ouverte, toutes les 10 minutes. L'ouverture automatique permet de les vérifier (et d'avoir tes horaires) dès le début du créneau.</div>
     </fieldset>
 
     <fieldset>
       <legend>Timeline</legend>
       <label><input type="checkbox" id="timelineEnabled"> <span data-i18n="timelineLabel">Ajouter les infos IDFM (ex : fin d'incident) à la timeline</span></label>
+      <div class="searchStatus" data-i18n="timelineHint">Autorise aussi la timeline pour StroyCommute dans l'app Pebble (autorisations de l'app), sinon rien n'y apparaît.</div>
     </fieldset>
   </div>
 
@@ -142,6 +156,43 @@ const CONFIG_HTML = `<!DOCTYPE html>
       <label><span data-i18n="guardWindow">W (minutes)</span> <input type="number" id="guardWindow" min="1" step="1" value="10"></label>
       <label><span data-i18n="guardPause">P (pause, minutes)</span> <input type="number" id="guardPause" min="1" step="1" value="15"></label>
     </div>
+    <button type="button" onclick="resetGuard()" data-i18n="guardReset">Lever la pause et tout rafraîchir</button>
+  </fieldset>
+
+  <fieldset>
+    <legend data-i18n="vibrateLegend">Vibration</legend>
+    <label for="vibrateMinutes" data-i18n="vibrateLabel">Vibrer quand le prochain départ est à :</label>
+    <select id="vibrateMinutes">
+      <option value="0" data-i18n="vibrateOff">Jamais</option>
+      <option value="1">1 min</option>
+      <option value="2">2 min</option>
+      <option value="3">3 min</option>
+      <option value="5">5 min</option>
+      <option value="10">10 min</option>
+    </select>
+    <div class="searchStatus" data-i18n="vibrateHint">Seulement quand l'app est ouverte sur l'arrêt concerné, une fois par départ.</div>
+  </fieldset>
+
+  <fieldset>
+    <legend data-i18n="pluginLegend">Cadrans</legend>
+    <label><input type="checkbox" id="pluginEnabled" checked> <span data-i18n="pluginLabel">Partager mes prochains départs avec les cadrans</span></label>
+    <div class="searchStatus" data-i18n="pluginHint">Pour les cadrans compatibles avec les plugins Pebble (aperçu à activer dans l'app Pebble : Réglages, Plugins). Mise à jour toutes les 2 minutes au plus, pour tes 3 premiers trajets, et plus du tout quand il reste moins de 300 appels PRIM dans la journée.</div>
+  </fieldset>
+
+  <!-- Error journal: filled from window.__diagLog (see buildConfigDataUri in
+       src/pkjs/index.js). Stays on the phone; the user copies it by hand. -->
+  <fieldset>
+    <legend data-i18n="diagLegend">Diagnostic</legend>
+    <div class="searchStatus" id="diagSummary"></div>
+    <details class="help" id="diagDetails" hidden>
+      <summary data-i18n="diagShow">Voir le journal</summary>
+      <textarea id="diagText" rows="10" readonly></textarea>
+      <div class="diagButtons">
+        <button type="button" onclick="copyDiag()" data-i18n="diagCopy">Copier</button>
+        <button type="button" class="remove" onclick="clearDiag()" data-i18n="diagClear">Effacer le journal</button>
+      </div>
+      <div class="searchStatus" id="diagCopyStatus"></div>
+    </details>
   </fieldset>
 
   <p id="itemCount"></p>
@@ -151,7 +202,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
   var MAX_ITEMS = 8;
   // Traffic alerts (followed lines, schedule, timeline) aren't implemented
   // on the watch yet: their section stays hidden and no line is saved.
-  var ALERTS_ENABLED = false;
+  var ALERTS_ENABLED = true;
 
   // UI strings. Keep the language list in sync with SUPPORTED_LANGUAGES in
   // src/pkjs/index.js and STRINGS in src/embeddedjs/main.js. "{name}"
@@ -181,12 +232,21 @@ const CONFIG_HTML = `<!DOCTYPE html>
       moveUp: "Monter",
       moveDown: "Descendre",
       linesLegend: "Lignes suivies (alertes trafic)",
+      linesHint: "Les lignes de tes arrêts suivis sont surveillées automatiquement. Ajoute ici d'autres lignes à surveiller.",
+      screensLabel: "Écrans sur la montre",
+      screensBoth: "Arrêts et alertes",
+      screensStops: "Arrêts seulement",
+      screensAlerts: "Alertes seulement",
+      notifyLabel: "Me notifier sur la montre d'une nouvelle perturbation pendant ce créneau",
+      autoOpenLabel: "Ouvrir l'app au début du créneau",
+      alertsHint: "Les alertes sont vérifiées quand l'app est ouverte, toutes les 10 minutes. L'ouverture automatique permet de les vérifier (et d'avoir tes horaires) dès le début du créneau.",
       lineSearchPlaceholder: "Rechercher une ligne (ex : 4, RER A)",
-      scheduleLegend: "Période de réception des alertes",
+      scheduleLegend: "Créneau de trajet (alertes)",
       dayMon: "Lun", dayTue: "Mar", dayWed: "Mer", dayThu: "Jeu", dayFri: "Ven", daySat: "Sam", daySun: "Dim",
       scheduleStart: "Début",
       scheduleEnd: "Fin",
-      timelineLabel: "Ajouter les infos IDFM (ex : fin d'incident) à la timeline",
+      timelineLabel: "Ajouter les perturbations de mes lignes, et leur fin, à la timeline",
+      timelineHint: "Autorise aussi la timeline pour StroyCommute dans l'app Pebble (autorisations de l'app), sinon rien n'y apparaît.",
       save: "Enregistrer",
       keyChecking: "Vérification...",
       keyValid: "Clé valide ✓",
@@ -202,16 +262,35 @@ const CONFIG_HTML = `<!DOCTYPE html>
       allTrains: "tous les trains",
       guardLegend: "Garde-fou appels PRIM",
       guardHint: "Après N appels en W minutes, plus aucun appel pendant P minutes. N = 0 : désactivé.",
+      guardReset: "Lever la pause et tout rafraîchir",
+      guardResetConfirm: "Lever la pause anti-quota et redemander tous les horaires et alertes ? La page se fermera sans enregistrer tes autres modifications.",
       guardMaxCalls: "N (appels max)",
       guardWindow: "W (minutes)",
       guardPause: "P (pause, minutes)",
       guardInvalid: "Garde-fou : N doit être 0 ou au moins 2, W et P au moins 1.",
+      vibrateLegend: "Vibration",
+      vibrateLabel: "Vibrer quand le prochain départ est à :",
+      vibrateOff: "Jamais",
+      vibrateHint: "Seulement quand l'app est ouverte sur l'arrêt concerné, une fois par départ.",
+      pluginLegend: "Cadrans",
+      pluginLabel: "Partager mes prochains départs avec les cadrans",
+      pluginHint: "Pour les cadrans compatibles avec les plugins Pebble (aperçu à activer dans l'app Pebble : Réglages, Plugins). Mise à jour toutes les 2 minutes au plus, pour tes 3 premiers trajets, et plus du tout quand il reste moins de 300 appels PRIM dans la journée.",
+      diagLegend: "Diagnostic",
+      diagNone: "Aucune erreur enregistrée.",
+      diagCount: "{n} erreur(s) enregistrée(s). En cas de souci, copie le journal et envoie-le au développeur.",
+      diagShow: "Voir le journal",
+      diagCopy: "Copier",
+      diagCopied: "Journal copié.",
+      diagCopyFailed: "Copie impossible : sélectionne le texte à la main.",
+      diagClear: "Effacer le journal",
+      diagClearConfirm: "Effacer le journal ? La page se fermera sans enregistrer tes autres modifications.",
       add: "Ajouter",
       cancel: "Annuler",
       searching: "Recherche...",
       searchError: "Erreur de recherche (vérifie ta connexion).",
       noResults: "Aucun résultat.",
-      lineResult: "Ligne {line} ({mode}, {operator})",
+      lineResult: "Ligne {line} · {mode}",
+      lineResultBus: "Ligne {line} · {mode} ({operator})",
       directionUnavailable: "(direction indisponible, réessaie plus tard)",
       alreadyTracked: "Ce trajet est déjà suivi.",
       brokenRow: "Arrêt invalide (ancienne version) -- supprime-le et ré-ajoute-le",
@@ -244,12 +323,21 @@ const CONFIG_HTML = `<!DOCTYPE html>
       moveUp: "Move up",
       moveDown: "Move down",
       linesLegend: "Followed lines (traffic alerts)",
+      linesHint: "The lines of your tracked stops are watched automatically. Add other lines to watch here.",
+      screensLabel: "Watch screens",
+      screensBoth: "Stops and alerts",
+      screensStops: "Stops only",
+      screensAlerts: "Alerts only",
+      notifyLabel: "Notify me on the watch of a new disruption during this window",
+      autoOpenLabel: "Open the app when the window starts",
+      alertsHint: "Alerts are checked while the app is open, every 10 minutes. Opening it automatically checks them (and shows your times) as the window starts.",
       lineSearchPlaceholder: "Search a line (e.g. 4, RER A)",
-      scheduleLegend: "Alert schedule",
+      scheduleLegend: "Commute window (alerts)",
       dayMon: "Mon", dayTue: "Tue", dayWed: "Wed", dayThu: "Thu", dayFri: "Fri", daySat: "Sat", daySun: "Sun",
       scheduleStart: "Start",
       scheduleEnd: "End",
-      timelineLabel: "Add IDFM notices (e.g. end of disruption) to the timeline",
+      timelineLabel: "Add my lines' disruptions, and their end, to the timeline",
+      timelineHint: "Also allow the timeline for StroyCommute in the Pebble app (the app's permissions), or nothing will show there.",
       save: "Save",
       keyChecking: "Checking...",
       keyValid: "Valid key ✓",
@@ -265,16 +353,35 @@ const CONFIG_HTML = `<!DOCTYPE html>
       allTrains: "all trains",
       guardLegend: "PRIM call guard",
       guardHint: "After N calls within W minutes, no call for P minutes. N = 0: disabled.",
+      guardReset: "Lift the pause and refresh everything",
+      guardResetConfirm: "Lift the quota pause and ask again for every time and alert? The page will close without saving your other changes.",
       guardMaxCalls: "N (max calls)",
       guardWindow: "W (minutes)",
       guardPause: "P (pause, minutes)",
       guardInvalid: "Call guard: N must be 0 or at least 2, W and P at least 1.",
+      vibrateLegend: "Vibration",
+      vibrateLabel: "Vibrate when the next departure is:",
+      vibrateOff: "Never",
+      vibrateHint: "Only while the app is open on that stop, once per departure.",
+      pluginLegend: "Watchfaces",
+      pluginLabel: "Share my next departures with watchfaces",
+      pluginHint: "For watchfaces that use Pebble plugins (a preview to turn on in the Pebble app: Settings, Plugins). Updated every 2 minutes at most, for your first 3 trips, and no more once fewer than 300 PRIM calls are left for the day.",
+      diagLegend: "Diagnostics",
+      diagNone: "No error recorded.",
+      diagCount: "{n} error(s) recorded. If something goes wrong, copy the log and send it to the developer.",
+      diagShow: "Show the log",
+      diagCopy: "Copy",
+      diagCopied: "Log copied.",
+      diagCopyFailed: "Can't copy: select the text by hand.",
+      diagClear: "Clear the log",
+      diagClearConfirm: "Clear the log? The page will close without saving your other changes.",
       add: "Add",
       cancel: "Cancel",
       searching: "Searching...",
       searchError: "Search failed (check your connection).",
       noResults: "No results.",
-      lineResult: "Line {line} ({mode}, {operator})",
+      lineResult: "Line {line} · {mode}",
+      lineResultBus: "Line {line} · {mode} ({operator})",
       directionUnavailable: "(direction unavailable, try again later)",
       alreadyTracked: "This trip is already followed.",
       brokenRow: "Invalid stop (older version) -- remove it and add it again",
@@ -336,6 +443,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
   function onLanguageChange() {
     lang = resolveLanguage(document.getElementById("language").value);
     applyStaticTranslations();
+    renderDiag();
     var stops = collectStops();
     var lines = collectLines();
     document.getElementById("stopsList").innerHTML = "";
@@ -756,7 +864,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
     var inputEl = document.getElementById(kind + "SearchInput");
     var resultsEl = document.getElementById(kind + "SearchResults");
     var query = inputEl.value.trim();
-    if (query.length < 2) {
+    // Line names are often one character ("A" for RER A, "4" for metro 4).
+    if (query.length < (kind === "line" ? 1 : 2)) {
       resultsEl.innerHTML = "";
       return;
     }
@@ -777,16 +886,56 @@ const CONFIG_HTML = `<!DOCTYPE html>
     // -- avoids breaking the clause's own quoting, not a real injection
     // risk against a read-only public search endpoint, but cheap to do.
     var safeQuery = query.replace(/"/g, "");
-    var field = kind === "stop" ? "stop_name" : "route_long_name";
-    var url = SEARCH_API + "?where=" + encodeURIComponent(field + ' like "' + safeQuery + '"') + "&limit=" + (kind === "stop" ? STOP_RESULTS_FETCHED : 50);
+    var url;
+    if (kind === "stop") {
+      url = SEARCH_API + "?where=" + encodeURIComponent('stop_name like "' + safeQuery + '"') + "&limit=" + STOP_RESULTS_FETCHED;
+    } else {
+      safeQuery = lineSearchName(safeQuery);
+      // Grouped by line: the dataset has one record per stop a line serves.
+      url =
+        SEARCH_API +
+        "?where=" + encodeURIComponent('route_long_name like "' + safeQuery + '"') +
+        "&group_by=" + encodeURIComponent("id,route_long_name,mode,operatorname") +
+        "&limit=50";
+    }
     fetch(url)
       .then((res) => res.json())
       .then((data) => {
-        renderResults(kind, data.results || []);
+        var results = data.results || [];
+        renderResults(kind, kind === "line" ? sortLineResults(results, safeQuery) : results);
       })
       .catch(() => {
         resultsEl.innerHTML = '<div class="searchStatus">' + escapeHtml(t("searchError")) + '</div>';
       });
+  }
+
+  /**
+   * The dataset names lines without their mode: RER A is "A", metro 4 is
+   * "4", tram 3a is "T3a" -- "RER A" would only find the "Remplacement RER
+   * A" bus.
+   * @param {string} query
+   * @returns {string} The query as a dataset line name.
+   */
+  function lineSearchName(query) {
+    var tram = /^tram(way)?\s*(t?)(\S.*)$/i.exec(query);
+    if (tram) return "T" + tram[3];
+    var stripped = query.replace(/^(rer|m[ée]tro|ligne|transilien|train)\s+/i, "");
+    return stripped || query;
+  }
+
+  /**
+   * @param {object[]} results - Line records (grouped by line).
+   * @param {string} name - The searched line name.
+   * @returns {object[]} Exact name first, then rail, metro, tram, the rest.
+   */
+  function sortLineResults(results, name) {
+    var lower = name.toLowerCase();
+    var rank = (r) =>
+      ((r.route_long_name || "").toLowerCase() === lower ? 0 : 10) + (r.mode in MODE_RANK ? MODE_RANK[r.mode] : 3);
+    return results
+      .map((r, i) => ({ r: r, i: i }))
+      .sort((a, b) => rank(a.r) - rank(b.r) || a.i - b.i)
+      .map((x) => x.r);
   }
 
   // A big interchange matches dozens of stop+line records, mostly buses
@@ -1027,7 +1176,10 @@ const CONFIG_HTML = `<!DOCTYPE html>
     results.forEach((r) => {
       var div = document.createElement("div");
       div.className = "searchResultItem";
-      div.textContent = tf("lineResult", { line: r.route_long_name, mode: r.mode, operator: r.operatorname });
+      // The operator only tells apart buses sharing a name (bus "A" vs RER A,
+      // bus "1" vs metro 1); rail lines are all SNCF or RATP.
+      var labelKey = r.mode === "Bus" && r.operatorname ? "lineResultBus" : "lineResult";
+      div.textContent = tf(labelKey, { line: r.route_long_name, mode: modeLabel(r.mode), operator: r.operatorname });
       div.onclick = () => {
         addLineRow({
           lineRef: idfmIdToStif(r.id, "line"),
@@ -1147,12 +1299,18 @@ const CONFIG_HTML = `<!DOCTYPE html>
 
   /** @param {{lineRef: string, lineName: string}} values */
   function addLineRow(values) {
+    // Colours from the line id, so lines saved before they were stored get
+    // them too (the watch's alert banner uses them).
+    var style = lineStyleFor("IDFM:" + (values.lineRef.split(":")[3] || ""));
     var div = document.createElement("div");
     div.className = "row lineRow";
     div.dataset.lineRef = values.lineRef;
     div.dataset.lineName = values.lineName;
+    div.dataset.lineColor = style.color;
+    div.dataset.lineTextColor = style.textColor;
     div.innerHTML =
-      '<span class="rowLabel">' + escapeHtml(tf("lineRow", { line: values.lineName })) + '</span>' +
+      '<span class="rowLabel"><span class="lineSwatch" style="background:' + escapeHtml(style.color) + '"></span>' +
+      escapeHtml(tf("lineRow", { line: values.lineName })) + '</span>' +
       '<button type="button" class="remove" onclick="this.parentElement.remove(); updateCount();">x</button>';
     document.getElementById("linesList").appendChild(div);
     updateCount();
@@ -1221,7 +1379,9 @@ const CONFIG_HTML = `<!DOCTYPE html>
     rows.forEach((row) => {
       result.push({
         lineRef: row.dataset.lineRef,
-        lineName: row.dataset.lineName
+        lineName: row.dataset.lineName,
+        lineColor: row.dataset.lineColor,
+        lineTextColor: row.dataset.lineTextColor
       });
     });
     return result;
@@ -1235,6 +1395,67 @@ const CONFIG_HTML = `<!DOCTYPE html>
     var maxOk = maxCalls === 0 || maxCalls >= 2;
     if (!maxOk || !(windowMinutes >= 1) || !(pauseMinutes >= 1)) return null;
     return { maxCalls: maxCalls, windowMinutes: windowMinutes, pauseMinutes: pauseMinutes };
+  }
+
+  /**
+   * @param {object[]} entries - Error journal entries (see src/pkjs/diag.js).
+   * @returns {string} One readable block per entry, most recent first.
+   */
+  function formatDiag(entries) {
+    var nl = String.fromCharCode(10); // no backslash escapes: this page is embedded in a template literal
+    return entries.slice().reverse().map((e) => {
+      var lines = [new Date(e.t).toLocaleString() + " [" + (e.src || "?") + "] " + e.w + ": " + e.m];
+      if (e.s) lines.push("  stack: " + e.s);
+      if (e.tr) lines.push("  trail: " + e.tr);
+      if (e.dev) lines.push("  device: " + e.dev);
+      return lines.join(nl);
+    }).join(nl + nl);
+  }
+
+  /** Fills the Diagnostic section from window.__diagLog. */
+  function renderDiag() {
+    var entries = Array.isArray(window.__diagLog) ? window.__diagLog : [];
+    document.getElementById("diagSummary").textContent = entries.length ? tf("diagCount", { n: entries.length }) : t("diagNone");
+    document.getElementById("diagDetails").hidden = entries.length === 0;
+    document.getElementById("diagText").value = formatDiag(entries);
+  }
+
+  /** Copies the journal to the clipboard (webviews vary: two attempts). */
+  function copyDiag() {
+    var area = document.getElementById("diagText");
+    var status = document.getElementById("diagCopyStatus");
+    area.focus();
+    area.select();
+    var copied = false;
+    try {
+      copied = document.execCommand("copy");
+    } catch (_error) {
+      copied = false;
+    }
+    if (copied) {
+      status.textContent = t("diagCopied");
+      return;
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(area.value).then(
+        () => { status.textContent = t("diagCopied"); },
+        () => { status.textContent = t("diagCopyFailed"); }
+      );
+    } else {
+      status.textContent = t("diagCopyFailed");
+    }
+  }
+
+  /** Asks pkjs to clear the journal (closes the page without saving). */
+  function clearDiag() {
+    if (!confirm(t("diagClearConfirm"))) return;
+    document.location = "pebblejs://close#" + encodeURIComponent(JSON.stringify({ action: "clearDiag" }));
+  }
+
+  /** Closes the webview asking pkjs to lift the call guard's pause and refresh. */
+  function resetGuard() {
+    if (!confirm(t("guardResetConfirm"))) return;
+    document.location = "pebblejs://close#" + encodeURIComponent(JSON.stringify({ action: "resetGuard" }));
   }
 
   /** Validates the form, then closes the webview with the config as JSON. */
@@ -1273,6 +1494,11 @@ const CONFIG_HTML = `<!DOCTYPE html>
       },
       timelineEnabled: document.getElementById("timelineEnabled").checked,
       callGuard: callGuard,
+      vibrateMinutes: parseInt(document.getElementById("vibrateMinutes").value, 10) || 0,
+      pluginEnabled: document.getElementById("pluginEnabled").checked,
+      notifyAlerts: document.getElementById("notifyAlerts").checked,
+      autoOpen: document.getElementById("autoOpen").checked,
+      screens: document.getElementById("screens").value,
       language: document.getElementById("language").value
     };
     var json = JSON.stringify(config);
@@ -1290,6 +1516,7 @@ const CONFIG_HTML = `<!DOCTYPE html>
     document.getElementById("language").value = choice;
     lang = resolveLanguage(choice);
     applyStaticTranslations();
+    renderDiag();
     updateCount();
     if (!initial) return;
     document.getElementById("apiKey").value = initial.apiKey || "";
@@ -1309,6 +1536,11 @@ const CONFIG_HTML = `<!DOCTYPE html>
       document.getElementById("scheduleEnd").value = initial.alertSchedule.endTime || "19:30";
     }
     document.getElementById("timelineEnabled").checked = !!initial.timelineEnabled;
+    document.getElementById("vibrateMinutes").value = String(initial.vibrateMinutes || 0);
+    document.getElementById("pluginEnabled").checked = initial.pluginEnabled !== false;
+    document.getElementById("notifyAlerts").checked = initial.notifyAlerts !== false;
+    document.getElementById("autoOpen").checked = !!initial.autoOpen;
+    document.getElementById("screens").value = initial.screens === "stops" || initial.screens === "alerts" ? initial.screens : "both";
     var guard = initial.callGuard || {};
     if (typeof guard.maxCalls === "number") document.getElementById("guardMaxCalls").value = guard.maxCalls;
     if (typeof guard.windowMinutes === "number") document.getElementById("guardWindow").value = guard.windowMinutes;
@@ -1383,15 +1615,15 @@ function utf8ToBase64(str) {
  *   whatever config is currently persisted (if any).
  */
 function buildConfigDataUri() {
-	const stored = localStorage.getItem("stroycommuteConfig");
-	const initialConfig = stored ? JSON.parse(stored) : null;
+	const initialConfig = readJson("stroycommuteConfig", null);
 	const injected = JSON.stringify(initialConfig).replace(/</g, "\\u003c");
 	// Resolved here rather than from the webview's navigator.language so the
 	// page's "auto" matches what the watch shows (see resolveLanguage).
 	const watchLanguage = JSON.stringify(resolveLanguage("auto"));
+	const diagLog = JSON.stringify(loadDiag()).replace(/</g, "\\u003c");
 	const html = CONFIG_HTML.replace(
 		"<script>",
-		`<script>window.__initialConfig = ${injected}; window.__watchLanguage = ${watchLanguage};`
+		`<script>window.__initialConfig = ${injected}; window.__watchLanguage = ${watchLanguage}; window.__diagLog = ${diagLog};`
 	);
 	return `data:text/html;charset=utf-8;base64,${utf8ToBase64(html)}`;
 }
@@ -1401,9 +1633,100 @@ const {
 	filterVisitsServingStop,
 	journeyMission,
 	decideCallGuard,
+	callGuardRoom,
 	callGuardSettingsChanged,
 	staleExtra,
+	journeyDestinationName,
+	rankDepartures,
 } = require("./trips");
+const { watchLineColors } = require("./colors");
+const alerts = require("./alerts");
+const { parseWatchDiag, mergeDiagEntries } = require("./diag");
+
+// --- Error journal (config page > Diagnostic) ---
+// Collects the watch's own journal (diagReport messages) and pkjs's
+// exceptions, so a crash in the field can be read afterwards without a
+// debugger or a live `pebble logs`. Stays on the phone: nothing is uploaded.
+const DIAG_KEY = "stroycommuteDiag";
+
+/**
+ * @param {string} key - localStorage key holding JSON.
+ * @param {*} fallback - Returned when the key is missing or garbled.
+ * @returns {*} The parsed value. A corrupted entry would otherwise throw
+ *   in every handler that reads it, for good.
+ */
+function readJson(key, fallback) {
+	try {
+		const raw = localStorage.getItem(key);
+		return raw ? JSON.parse(raw) : fallback;
+	} catch (error) {
+		console.log(`garbled ${key} ignored: ${error}`);
+		return fallback;
+	}
+}
+
+/** @returns {object[]} Stored journal entries, [] if none/garbled. */
+function loadDiag() {
+	try {
+		const list = JSON.parse(localStorage.getItem(DIAG_KEY) || "[]");
+		return Array.isArray(list) ? list : [];
+	} catch (_error) {
+		return [];
+	}
+}
+
+/** @param {object[]} entries - Added to the stored journal. */
+function storeDiag(entries) {
+	if (entries.length === 0) return;
+	localStorage.setItem(
+		DIAG_KEY,
+		JSON.stringify(mergeDiagEntries(loadDiag(), entries))
+	);
+}
+
+/** @returns {string} e.g. "emery fw 4.9.1", "" if unavailable. */
+function watchDescription() {
+	try {
+		const info = Pebble.getActiveWatchInfo();
+		const fw = info.firmware;
+		return `${info.platform} fw ${fw.major}.${fw.minor}.${fw.patch}${fw.suffix ? `-${fw.suffix}` : ""}`;
+	} catch (_error) {
+		return "";
+	}
+}
+
+/**
+ * Records a pkjs exception in the journal. Never throws.
+ * @param {string} where
+ * @param {*} error
+ */
+function recordPhoneError(where, error) {
+	console.log(`error in ${where}: ${error}`);
+	try {
+		const entry = { t: Date.now(), src: "phone", w: where, m: String(error) };
+		// biome-ignore lint/complexity/useOptionalChain: no `?.` in pkjs (webpack 1)
+		if (error && error.stack) entry.s = String(error.stack).slice(0, 500);
+		storeDiag([entry]);
+	} catch (storeError) {
+		console.log(`journal write failed: ${storeError}`);
+	}
+}
+
+/**
+ * @param {string} where - Recorded if `fn` throws.
+ * @param {Function} fn
+ * @returns {Function} `fn`, recording instead of propagating exceptions.
+ */
+function guarded(where, fn) {
+	return function (...args) {
+		try {
+			return fn.apply(this, args);
+		} catch (error) {
+			recordPhoneError(where, error);
+			return undefined;
+		}
+	};
+}
 
 // Shared by the initial "ready" send and the Task 8b configResendRequest
 // handler below -- both just need "resend whatever's currently persisted,
@@ -1442,9 +1765,9 @@ function resolveLanguage(choice) {
  * instead of waiting on a config that will never come.
  */
 function sendStoredConfigToWatch() {
-	const stored = localStorage.getItem("stroycommuteConfig");
+	const stored = storedConfig();
 	if (stored) {
-		sendConfigToWatch(JSON.parse(stored));
+		sendConfigToWatch(stored);
 		return;
 	}
 	sendItemsSequentially(
@@ -1458,6 +1781,7 @@ function sendStoredConfigToWatch() {
 				scheduleEndMinutes: 0,
 				timelineEnabled: 0,
 				language: resolveLanguage("auto"),
+				configId: configId,
 			},
 		],
 		0
@@ -1465,11 +1789,23 @@ function sendStoredConfigToWatch() {
 }
 
 Pebble.addEventListener("ready", moddableProxy.readyReceived);
-Pebble.addEventListener("appmessage", (e) => {
-	if (moddableProxy.appMessageReceived(e)) return;
-	if (e.payload.itemType === "refreshStop") {
-		handleRefreshStop(e.payload);
-	} else if (e.payload.itemType === "configResendRequest") {
+Pebble.addEventListener(
+	"appmessage",
+	guarded("appmessage", (e) => {
+		if (moddableProxy.appMessageReceived(e)) return;
+		handleAppMessage(e.payload);
+	})
+);
+
+/** @param {object} payload - A watch AppMessage not meant for the proxy. */
+function handleAppMessage(payload) {
+	if (payload.itemType === "refreshStop") {
+		handleRefreshStop(payload);
+	} else if (payload.itemType === "diagReport") {
+		storeDiag(parseWatchDiag(payload.diagText, watchDescription()));
+	} else if (payload.itemType === "refreshAlerts") {
+		refreshAlerts();
+	} else if (payload.itemType === "configResendRequest") {
 		// Task 8b reconciliation: the watch didn't see a complete config
 		// within its timeout and is asking for a fresh full resend. Reuse
 		// sendConfigToWatch() as-is -- handleConfigItem already resets
@@ -1477,25 +1813,69 @@ Pebble.addEventListener("appmessage", (e) => {
 		// mid-session is safe.
 		sendStoredConfigToWatch();
 	}
-});
+}
 
-Pebble.addEventListener("showConfiguration", () => {
-	Pebble.openURL(buildConfigDataUri());
-});
+Pebble.addEventListener(
+	"showConfiguration",
+	guarded("showConfiguration", () => {
+		Pebble.openURL(buildConfigDataUri());
+	})
+);
 
-Pebble.addEventListener("webviewclosed", (e) => {
-	if (!e.response) return;
-	const config = JSON.parse(decodeURIComponent(e.response));
-	const previous = localStorage.getItem("stroycommuteConfig");
-	const previousGuard = previous ? JSON.parse(previous).callGuard : undefined;
+Pebble.addEventListener(
+	"webviewclosed",
+	guarded("webviewclosed", (e) => {
+		if (!e.response) return;
+		const config = JSON.parse(decodeURIComponent(e.response));
+		// Config page > Diagnostic > Clear: closes without saving the settings.
+		if (config.action === "clearDiag") {
+			localStorage.removeItem(DIAG_KEY);
+			return;
+		}
+		// Config page > PRIM call guard > Lift the pause: also closes
+		// without saving.
+		if (config.action === "resetGuard") {
+			resetGuardAndRefresh();
+			return;
+		}
+		saveConfig(config);
+	})
+);
+
+/**
+ * Lifts the call guard's pause (and forgets its counted calls), then has
+ * everything asked again: cached answers dropped, traffic info due, and the
+ * config sent again so the watch requests every stop right away.
+ */
+function resetGuardAndRefresh() {
+	localStorage.removeItem("stroycommuteCallGuard");
+	responseCache.clear();
+	// Due now, messages kept (to tell new from ended ones).
+	const cache = readJson(ALERTS_KEY, {});
+	for (const lineRef of Object.keys(cache)) cache[lineRef].at = 0;
+	localStorage.setItem(ALERTS_KEY, JSON.stringify(cache));
+	const config = storedConfig();
+	if (!config) return;
+	configId += 1; // replies to earlier requests are now stale
+	sendConfigToWatch(config);
+	refreshAlerts();
+}
+
+/** @param {object} config - The config page's saved settings. */
+function saveConfig(config) {
+	const previous = storedConfig();
+	const previousGuard = previous ? previous.callGuard : undefined;
 	// New guard settings apply right away: a pause started under the old
 	// ones would otherwise keep running (see callGuardSettingsChanged).
 	if (callGuardSettingsChanged(previousGuard, config.callGuard)) {
 		localStorage.removeItem("stroycommuteCallGuard");
 	}
 	localStorage.setItem("stroycommuteConfig", JSON.stringify(config));
+	pruneLastGood(config.trackedStops);
+	responseCache.clear(); // the API key may have changed
+	configId += 1; // replies to earlier requests are now stale
 	sendConfigToWatch(config);
-});
+}
 
 /**
  * @param {string} hhmm - Time in "HH:MM" form, e.g. "07:30".
@@ -1517,7 +1897,10 @@ function daysToBitmask(days) {
 }
 
 // Mirrors ALERTS_ENABLED in CONFIG_HTML -- flip both together.
-const ALERTS_ENABLED = false;
+const ALERTS_ENABLED = true;
+
+// The config page's "screens" setting, as configMeta sends it.
+const SCREENS_CODES = { both: 0, stops: 1, alerts: 2 };
 
 /**
  * Sends the full config (schedule + tracked stops/lines) to the watch as a
@@ -1525,10 +1908,16 @@ const ALERTS_ENABLED = false;
  * @param {object} config - Parsed stroycommuteConfig (apiKey, trackedStops,
  *   trackedLines, alertSchedule, timelineEnabled).
  */
-function sendConfigToWatch(config) {
-	// Traffic alerts aren't implemented yet (see ALERTS_ENABLED in
-	// CONFIG_HTML): lines saved by an older version would only show
-	// "coming soon" screens on the watch.
+// Id of the saved config, sent with it to the watch and echoed in every
+// departureUpdate as it was when the request came in: the watch drops
+// replies to requests made under an earlier config. A new pkjs start picks
+// a new one (the watch then gets the config again with it).
+let configId = Date.now() % 1000000000;
+
+function sendConfigToWatch(rawConfig) {
+	const config = normalizeConfig(rawConfig);
+	// Lines added in the alerts section (the watch always shows them); the
+	// tracked stops' lines are watched too, see alertLines in alerts.js.
 	const trackedLines = ALERTS_ENABLED ? config.trackedLines : [];
 	const itemCount = 1 + config.trackedStops.length + trackedLines.length;
 
@@ -1542,6 +1931,13 @@ function sendConfigToWatch(config) {
 			scheduleEndMinutes: timeStringToMinutes(config.alertSchedule.endTime),
 			timelineEnabled: config.timelineEnabled ? 1 : 0,
 			language: resolveLanguage(config.language),
+			// Vibrate when the next departure gets this close (0 = off).
+			vibrateMinutes: config.vibrateMinutes,
+			// Open the app when the schedule starts (watch wakeup).
+			autoOpen: config.autoOpen ? 1 : 0,
+			// Watch screens: 0 stops and alerts, 1 stops only, 2 alerts only.
+			screens: SCREENS_CODES[config.screens],
+			configId: configId,
 		},
 	];
 
@@ -1554,9 +1950,11 @@ function sendConfigToWatch(config) {
 			lineRef: stop.lineRef,
 			lineName: stop.lineName,
 			stopName: stop.stopName,
-			lineColor: stop.lineColor || "#888888",
-			lineTextColor: stop.lineTextColor || "#ffffff",
 		};
+		// Rounded to the watch's 64 colors, text kept readable (colors.js).
+		const colors = watchLineColors(stop.lineColor, stop.lineTextColor);
+		item.lineColor = colors.color;
+		item.lineTextColor = colors.textColor;
 		// Optional strings are omitted rather than sent empty (see
 		// docs/pebble-idfm-prim/SKILL.md, AppMessage format).
 		if (stop.destStopRef) {
@@ -1610,21 +2008,26 @@ const CONFIG_SEND_GAP_MS = 200;
  * @param {object[]} items
  * @param {number} index
  * @param {number} [retriesLeft]
+ * @param {function()} [onDone] - Called once every item was sent or given
+ *   up on.
  */
-function sendItemsSequentially(items, index, retriesLeft) {
-	if (index >= items.length) return;
+function sendItemsSequentially(items, index, retriesLeft, onDone) {
+	if (index >= items.length) {
+		if (onDone) onDone();
+		return;
+	}
 	if (retriesLeft === undefined) retriesLeft = MAX_SEND_RETRIES;
 	Pebble.sendAppMessage(
 		items[index],
 		() => {
 			setTimeout(
-				() => sendItemsSequentially(items, index + 1),
+				() => sendItemsSequentially(items, index + 1, undefined, onDone),
 				CONFIG_SEND_GAP_MS
 			);
 		},
 		() => {
 			if (retriesLeft > 0) {
-				sendItemsSequentially(items, index, retriesLeft - 1);
+				sendItemsSequentially(items, index, retriesLeft - 1, onDone);
 			} else {
 				console.log(
 					"sendAppMessage: giving up on item " +
@@ -1633,13 +2036,16 @@ function sendItemsSequentially(items, index, retriesLeft) {
 						MAX_SEND_RETRIES +
 						" retries"
 				);
-				sendItemsSequentially(items, index + 1);
+				sendItemsSequentially(items, index + 1, undefined, onDone);
 			}
 		}
 	);
 }
 
-Pebble.addEventListener("ready", sendStoredConfigToWatch);
+Pebble.addEventListener(
+	"ready",
+	guarded("ready.sendStoredConfig", sendStoredConfigToWatch)
+);
 
 // --- Departures — PRIM stop-monitoring fetch/parse/convert ---
 //
@@ -1655,35 +2061,6 @@ Pebble.addEventListener("ready", sendStoredConfigToWatch);
 // SIRI Lite parsing, and UTC→minutes conversion all live here now. The API
 // key is read from localStorage (already persisted by webviewclosed above)
 // rather than carried on the wire — the watch never sees it.
-
-// pkjs has full Date support — this is why the UTC->minutes conversion
-// lives here, not in embeddedjs (see idfm-api-reference.md's UTC gotcha).
-/**
- * @param {object} call - A SIRI MonitoredCall.
- * @returns {number|null} Minutes from now until the call's best available
- *   time field, or null if none of them are usable. Real-hardware evidence
- *   (the "undefined min" bug): `ExpectedArrivalTime` is absent on some real
- *   PRIM calls -- e.g. a bus/tram still at its origin stop, which only
- *   reports a departure time -- which previously produced NaN here. NaN
- *   isn't a valid AppMessage tuple value; pkjs's sendAppMessage silently
- *   dropped the "minutes" key rather than throwing, so the watch decoded a
- *   `state: "ok"` update with no minutes field at all -- rendering the
- *   literal string "undefined min". Falling back across the other SIRI time
- *   fields, and returning null instead of NaN when truly none are present,
- *   fixes it at the source: the caller sends `state: "noRealtimeData"`
- *   instead (an already-handled UI state) rather than a broken "ok".
- */
-function callMinutesRemaining(call) {
-	const timeField =
-		call.ExpectedArrivalTime ||
-		call.ExpectedDepartureTime ||
-		call.AimedArrivalTime ||
-		call.AimedDepartureTime;
-	if (!timeField) return null;
-	const expected = new Date(timeField);
-	const minutes = Math.round((expected.getTime() - Date.now()) / 60000);
-	return Number.isNaN(minutes) ? null : minutes;
-}
 
 // Dev-only escape hatch: real PRIM calls are quota-limited (a handful of
 // requests can exhaust a day's quota), which otherwise blocks all
@@ -1717,33 +2094,11 @@ function todayUtc() {
  */
 function recordPrimRequestAndGetQuotaRemaining() {
 	const today = todayUtc();
-	const stored = localStorage.getItem("stroycommuteQuota");
-	let state = stored ? JSON.parse(stored) : null;
+	let state = readJson("stroycommuteQuota", null);
 	if (!state || state.date !== today) state = { date: today, count: 0 };
 	state.count += 1;
 	localStorage.setItem("stroycommuteQuota", JSON.stringify(state));
 	return Math.max(0, PRIM_DAILY_QUOTA - state.count);
-}
-
-/**
- * @param {object} journey - A SIRI MonitoredVehicleJourney.
- * @returns {string} Best available destination label, "" if none. SNCF
- *   (RER/Transilien) journeys don't always carry DestinationDisplay, and an
- *   empty array there used to throw inside the parse below -- surfacing as
- *   a bogus "network" error.
- */
-function journeyDestinationName(journey) {
-	const candidates = [
-		// biome-ignore lint/complexity/useOptionalChain: no `?.` in pkjs -- the SDK's webpack 1 bundler predates ES2020 syntax
-		(journey.MonitoredCall || {}).DestinationDisplay,
-		journey.DestinationName,
-		journey.DirectionName,
-	];
-	for (const list of candidates) {
-		const first = (list || [])[0] || {};
-		if (first.value) return first.value;
-	}
-	return "";
 }
 
 const STOP_MONITORING_URL =
@@ -1751,8 +2106,36 @@ const STOP_MONITORING_URL =
 
 /** @returns {object|null} The persisted config, if any. */
 function storedConfig() {
-	const stored = localStorage.getItem("stroycommuteConfig");
-	return stored ? JSON.parse(stored) : null;
+	const config = readJson("stroycommuteConfig", null);
+	return config && typeof config === "object" ? config : null;
+}
+
+/**
+ * @param {object} config - A saved config, possibly from an older version.
+ * @returns {object} The same with every field sendConfigToWatch reads
+ *   present (configs saved before a field existed lack it).
+ */
+function normalizeConfig(config) {
+	const schedule = config.alertSchedule || {};
+	return Object.assign({}, config, {
+		trackedStops: Array.isArray(config.trackedStops) ? config.trackedStops : [],
+		trackedLines: Array.isArray(config.trackedLines) ? config.trackedLines : [],
+		vibrateMinutes: Math.max(
+			0,
+			Math.min(30, Math.floor(Number(config.vibrateMinutes)) || 0)
+		),
+		notifyAlerts: config.notifyAlerts !== false,
+		autoOpen: !!config.autoOpen,
+		screens:
+			config.screens === "stops" || config.screens === "alerts"
+				? config.screens
+				: "both",
+		alertSchedule: {
+			days: Array.isArray(schedule.days) ? schedule.days : [],
+			startTime: schedule.startTime || "07:00",
+			endTime: schedule.endTime || "19:30",
+		},
+	});
 }
 
 /**
@@ -1763,15 +2146,114 @@ function storedConfig() {
  * @returns {{allowed: boolean, minutesLeft: number}}
  */
 function checkCallGuard(config, count) {
-	const stored = localStorage.getItem("stroycommuteCallGuard");
 	const decision = decideCallGuard(
-		stored ? JSON.parse(stored) : null,
+		readJson("stroycommuteCallGuard", null),
 		config ? config.callGuard : undefined,
 		Date.now(),
 		count
 	);
 	localStorage.setItem("stroycommuteCallGuard", JSON.stringify(decision.state));
 	return decision;
+}
+
+/**
+ * Gives back to the call guard one call that never reached PRIM (no
+ * connection: no HTTP answer at all), so being offline can't start a
+ * pause. A timed-out call may have reached PRIM and stays counted.
+ */
+function refundGuardCall() {
+	const state = readJson("stroycommuteCallGuard", null);
+	if (!state || !Array.isArray(state.calls) || state.calls.length === 0) return;
+	const calls = state.calls.slice().sort((a, b) => a - b);
+	calls.pop();
+	localStorage.setItem(
+		"stroycommuteCallGuard",
+		JSON.stringify(Object.assign({}, state, { calls: calls }))
+	);
+}
+
+/**
+ * @param {XMLHttpRequest} xhr - A finished PRIM request.
+ * @returns {?number} The endpoint's calls left today, from PRIM's
+ *   X-Ratelimit-Remaining-Day header, null when absent.
+ */
+function remainingQuota(xhr) {
+	try {
+		const value = xhr.getResponseHeader("X-Ratelimit-Remaining-Day");
+		const n = value === null || value === "" ? Number.NaN : Number(value);
+		return Number.isFinite(n) ? n : null;
+	} catch (_error) {
+		return null;
+	}
+}
+
+// A PRIM request without an answer after this long counts as a network error.
+const PRIM_TIMEOUT_MS = 10000;
+
+// Recent stop-monitoring answers per "stopRef|lineRef", and the requests in
+// flight. A refresh asked again within RESPONSE_CACHE_MS (Select right
+// after the timer, two trips boarding at the same stop) reuses the answer
+// instead of spending another PRIM call; minutes are recomputed from the
+// cached times, so they stay right.
+const RESPONSE_CACHE_MS = 20000;
+const responseCache = new Map(); // key -> { at, visits }
+const inFlight = new Map(); // key -> callbacks waiting for the answer
+
+/** @returns {string} Key for responseCache/inFlight. */
+function visitsKey(ref, lineRef) {
+	return `${ref}|${lineRef}`;
+}
+
+/** @returns {?object[]} Visits answered less than RESPONSE_CACHE_MS ago. */
+function cachedVisits(ref, lineRef) {
+	const entry = responseCache.get(visitsKey(ref, lineRef));
+	return entry && Date.now() - entry.at < RESPONSE_CACHE_MS
+		? entry.visits
+		: null;
+}
+
+/** @returns {boolean} True when getStopVisits would make a PRIM call. */
+function needsFetch(ref, lineRef) {
+	if (cachedVisits(ref, lineRef)) return false;
+	const prefix = `${visitsKey(ref, lineRef)}|`;
+	return !Array.from(inFlight.keys()).some((k) => k.indexOf(prefix) === 0);
+}
+
+/**
+ * fetchStopVisits, sharing a recent answer or a request already in flight.
+ * @param {string} apiKey
+ * @param {string} ref
+ * @param {string} lineRef
+ * @param {function(string, object[]=): void} done
+ */
+function getStopVisits(apiKey, ref, lineRef, done) {
+	const key = visitsKey(ref, lineRef);
+	const cached = cachedVisits(ref, lineRef);
+	if (cached) {
+		done("ok", cached);
+		return;
+	}
+	// Shared only under the same API key: a request made before the key
+	// was changed must not answer for the new one.
+	const flightKey = `${key}|${apiKey}`;
+	const waiting = inFlight.get(flightKey);
+	if (waiting) {
+		waiting.push(done);
+		return;
+	}
+	inFlight.set(flightKey, [done]);
+	fetchStopVisits(apiKey, ref, lineRef, (state, visits) => {
+		const callbacks = inFlight.get(flightKey) || [];
+		inFlight.delete(flightKey);
+		if (state === "ok") responseCache.set(key, { at: Date.now(), visits });
+		for (const callback of callbacks) {
+			try {
+				callback(state, visits);
+			} catch (error) {
+				recordPhoneError("stop-monitoring callback", error);
+			}
+		}
+	});
 }
 
 /**
@@ -1791,16 +2273,45 @@ function fetchStopVisits(apiKey, stopRef, lineRef, done) {
 		"&LineRef=" +
 		encodeURIComponent(lineRef);
 	const xhr = new XMLHttpRequest();
+	// Exactly one answer per request: load, error or timeout, whichever
+	// comes first. A request that never answers would otherwise leave the
+	// watch without a reply.
+	let finished = false;
+	const timer = setTimeout(
+		guarded("stop-monitoring.timeout", () => {
+			try {
+				xhr.abort();
+			} catch (_error) {
+				// already over
+			}
+			finish("network");
+		}),
+		PRIM_TIMEOUT_MS
+	);
+	const finish = (state, visits) => {
+		if (finished) return;
+		finished = true;
+		clearTimeout(timer);
+		done(state, visits);
+	};
 	xhr.open("GET", url, true);
 	xhr.setRequestHeader("apiKey", apiKey);
-	xhr.onload = () => {
-		if (xhr.status === 429) return done("quotaExceeded");
-		if (xhr.status === 401 || xhr.status === 403) return done("invalidKey");
+	xhr.onload = guarded("stop-monitoring.onload", () => {
+		// PRIM's own count, when the response carries it (it does), over the
+		// local estimate.
+		const remaining = remainingQuota(xhr);
+		if (remaining !== null) lastQuotaRemaining = remaining;
+		if (xhr.status === 0) {
+			refundGuardCall(); // no connection: PRIM never saw it
+			return finish("network");
+		}
+		if (xhr.status === 429) return finish("quotaExceeded");
+		if (xhr.status === 401 || xhr.status === 403) return finish("invalidKey");
 		if (xhr.status === 400 || xhr.status === 404) {
 			console.log(`stop-monitoring ${xhr.status} for ${stopRef}`);
-			return done("invalidStop");
+			return finish("invalidStop");
 		}
-		if (xhr.status < 200 || xhr.status >= 300) return done("network");
+		if (xhr.status < 200 || xhr.status >= 300) return finish("network");
 		let visits;
 		try {
 			visits =
@@ -1808,11 +2319,14 @@ function fetchStopVisits(apiKey, stopRef, lineRef, done) {
 					.StopMonitoringDelivery[0].MonitoredStopVisit || [];
 		} catch (error) {
 			console.log("stop-monitoring parse error: " + error);
-			return done("network");
+			return finish("network");
 		}
-		done("ok", visits);
-	};
-	xhr.onerror = () => done("network");
+		finish("ok", visits);
+	});
+	xhr.onerror = guarded("stop-monitoring.onerror", () => {
+		if (!finished) refundGuardCall(); // no connection: PRIM never saw it
+		finish("network");
+	});
 	lastQuotaRemaining = recordPrimRequestAndGetQuotaRemaining();
 	xhr.send();
 }
@@ -1838,37 +2352,20 @@ function worstState(states) {
 
 /**
  * Turns already-filtered visits into the watch's "ok"/"noRealtimeData"
- * reply: drops visits without a usable time (the "undefined min" bug, see
- * callMinutesRemaining), sorts running trains first then at-stop first
- * then by minutes, and attaches the first two departures' mission codes.
+ * reply (ranking in rankDepartures, src/pkjs/trips.js: visits without a
+ * usable time are dropped, which once showed as "undefined min"), with the
+ * first two departures' times and mission codes.
  * @param {object[]} visits - MonitoredStopVisit list.
  * @param {string} lineName
  * @param {function(string, object=): void} reply
  */
 function replyWithDepartures(visits, lineName, reply) {
-	const departures = visits
-		.map((visit) => visit.MonitoredVehicleJourney)
-		.filter((journey) => journey && journey.MonitoredCall)
-		.map((journey) => {
-			const call = journey.MonitoredCall;
-			const atStop = call.VehicleAtStop === true;
-			const minutes = callMinutesRemaining(call);
-			return {
-				journey: journey,
-				atStop: atStop,
-				cancelled: call.DepartureStatus === "cancelled",
-				// ExpectedArrivalTime can be slightly in the past before
-				// VehicleAtStop flips (real-hardware evidence) -- floor at 0.
-				minutes: minutes === null ? null : Math.max(0, minutes),
-				rank: atStop ? -1 : minutes,
-			};
+	const departures = rankDepartures(visits, Date.now()).map((d) =>
+		Object.assign(d, {
+			// Epoch seconds: the watch counts the minutes down itself.
+			departTime: d.timeMs === null ? null : Math.floor(d.timeMs / 1000),
 		})
-		.filter((d) => d.atStop || d.minutes !== null)
-		// Running trains first: a cancelled one is only shown when nothing
-		// else is announced, so it can't hide the real next departure.
-		.sort(
-			(a, b) => Number(a.cancelled) - Number(b.cancelled) || a.rank - b.rank
-		);
+	);
 
 	if (departures.length === 0) {
 		reply("noRealtimeData");
@@ -1884,6 +2381,9 @@ function replyWithDepartures(visits, lineName, reply) {
 		atStop: first.atStop,
 		cancelled: first.cancelled,
 	};
+	if (!first.atStop && first.departTime !== null) {
+		extra.departTime = first.departTime;
+	}
 	const mission = journeyMission(first.journey);
 	if (mission) extra.mission = mission;
 	// The watch prints minutes2 as-is (no at-stop flag for it), hence 0
@@ -1891,6 +2391,9 @@ function replyWithDepartures(visits, lineName, reply) {
 	if (departures.length > 1 && !departures[1].cancelled) {
 		const second = departures[1];
 		extra.minutes2 = second.atStop ? 0 : second.minutes;
+		if (!second.atStop && second.departTime !== null) {
+			extra.departTime2 = second.departTime;
+		}
 		const mission2 = journeyMission(second.journey);
 		if (mission2) extra.mission2 = mission2;
 	}
@@ -1924,6 +2427,20 @@ function saveLastGood(tripKey, extra) {
 }
 
 /**
+ * Drops the saved times of trips that are no longer tracked.
+ * @param {object[]} trackedStops - The new config's trackedStops.
+ */
+function pruneLastGood(trackedStops) {
+	const all = loadLastGood();
+	const kept = {};
+	for (const stop of trackedStops || []) {
+		const key = [stop.stopRef, stop.lineRef, stop.destStopRef || ""].join("|");
+		if (all[key]) kept[key] = all[key];
+	}
+	localStorage.setItem(LAST_GOOD_KEY, JSON.stringify(kept));
+}
+
+/**
  * Handles a watch-sent `refreshStop`: one stop-monitoring request on A, or
  * two in parallel (A and B) for an A->B trip, kept to trains serving A then
  * B (filterVisitsServingStop). Replies with one `departureUpdate`.
@@ -1933,13 +2450,15 @@ function saveLastGood(tripKey, extra) {
 function handleRefreshStop(request) {
 	const destStopRef = request.destStopRef || "";
 	const tripKey = [request.stopRef, request.lineRef, destStopRef].join("|");
+	// The config this request is answered under (see configId).
+	const requestConfigId = configId;
 	const send = (state, extra) =>
 		sendDepartureUpdate(
 			request.stopRef,
 			request.lineRef,
 			destStopRef,
 			state,
-			extra
+			Object.assign({ configId: requestConfigId }, extra || {})
 		);
 	const reply = (state, extra) => {
 		if (state === "ok") {
@@ -1993,7 +2512,12 @@ function handleRefreshStop(request) {
 	}
 
 	const config = storedConfig();
-	const guard = checkCallGuard(config, refs.length);
+	// Only the calls that will really reach PRIM count against the guard.
+	const calls = refs.filter((ref) => needsFetch(ref, request.lineRef)).length;
+	const guard =
+		calls > 0
+			? checkCallGuard(config, calls)
+			: { allowed: true, minutesLeft: 0 };
 	if (!guard.allowed) {
 		reply("rateLimited", { minutes: guard.minutesLeft });
 		return;
@@ -2003,7 +2527,7 @@ function handleRefreshStop(request) {
 	const results = [];
 	let pending = refs.length;
 	refs.forEach((ref, i) => {
-		fetchStopVisits(apiKey, ref, request.lineRef, (state, visits) => {
+		getStopVisits(apiKey, ref, request.lineRef, (state, visits) => {
 			results[i] = { state: state, visits: visits };
 			pending -= 1;
 			if (pending > 0) return;
@@ -2051,5 +2575,349 @@ function sendDepartureUpdate(stopRef, lineRef, destStopRef, state, extra) {
 	// Attached to every reply regardless of state so the watch's settings
 	// screen always reflects the latest known count.
 	if (lastQuotaRemaining !== null) payload.quotaRemaining = lastQuotaRemaining;
-	Pebble.sendAppMessage(payload);
+	sendWithRetry(payload, DEPARTURE_SEND_RETRIES);
+}
+
+// A departureUpdate the watch didn't take (busy, Bluetooth hiccup) is sent
+// again a few times rather than lost until the next refresh.
+const DEPARTURE_SEND_RETRIES = 2;
+const DEPARTURE_RETRY_DELAY_MS = 500;
+
+/**
+ * @param {object} payload
+ * @param {number} retriesLeft
+ */
+function sendWithRetry(payload, retriesLeft) {
+	Pebble.sendAppMessage(
+		payload,
+		() => {},
+		() => {
+			if (retriesLeft <= 0) {
+				console.log(`${payload.itemType} not delivered, giving up`);
+				return;
+			}
+			setTimeout(
+				guarded("sendWithRetry", () => sendWithRetry(payload, retriesLeft - 1)),
+				DEPARTURE_RETRY_DELAY_MS
+			);
+		}
+	);
+}
+
+// --- Traffic alerts (PRIM general-message) ---
+// The watch asks (refreshAlerts) when the config loads and every 10 min
+// while the app is open; nothing runs with the app closed (see the
+// optional wakeup at the schedule's start, watch side). Each watched line
+// costs one general-message call per ALERT_CACHE_MS at most, on a quota
+// separate from stop-monitoring's.
+
+const GENERAL_MESSAGE_URL =
+	"https://prim.iledefrance-mobilites.fr/marketplace/general-message";
+const ALERTS_KEY = "stroycommuteAlerts"; // lineRef -> { at, messages }
+const ALERTS_SEEN_KEY = "stroycommuteAlertSeen"; // message id -> first seen
+const ALERTS_TRIED_KEY = "stroycommuteAlertTried"; // lineRef -> last call (ms)
+const ALERTS_PINNED_KEY = "stroycommuteAlertPinned"; // message id -> { lineName, text } (true before)
+const ALERT_CACHE_MS = 10 * 60000;
+// Notifications per check, at most (several new messages at once usually
+// mean a network-wide event, and the watch screens list them all anyway).
+const MAX_NOTIFICATIONS = 3;
+const ALERT_TEXTS = {
+	fr: { trafficInfo: "Info trafic", trafficEnded: "Fin de perturbation" },
+	en: { trafficInfo: "Traffic info", trafficEnded: "Disruption over" },
+};
+
+/**
+ * Fetches one line's messages; `done(messages)` gets null on any failure.
+ * @param {string} apiKey
+ * @param {string} lineRef
+ * @param {function(?object[]): void} done
+ */
+function fetchGeneralMessages(apiKey, lineRef, done) {
+	const xhr = new XMLHttpRequest();
+	let finished = false;
+	const finish = (messages) => {
+		if (finished) return;
+		finished = true;
+		clearTimeout(timer);
+		done(messages);
+	};
+	const timer = setTimeout(
+		guarded("general-message.timeout", () => {
+			try {
+				xhr.abort();
+			} catch (_error) {
+				// already over
+			}
+			finish(null);
+		}),
+		PRIM_TIMEOUT_MS
+	);
+	xhr.open(
+		"GET",
+		`${GENERAL_MESSAGE_URL}?LineRef=${encodeURIComponent(lineRef)}`,
+		true
+	);
+	xhr.setRequestHeader("apiKey", apiKey);
+	xhr.onload = guarded("general-message.onload", () => {
+		if (xhr.status < 200 || xhr.status >= 300) {
+			console.log(`general-message ${xhr.status} for ${lineRef}`);
+			return finish(null);
+		}
+		finish(alerts.parseGeneralMessages(JSON.parse(xhr.responseText), lineRef));
+	});
+	xhr.onerror = guarded("general-message.onerror", () => {
+		if (!finished) refundGuardCall(); // no connection: PRIM never saw it
+		finish(null);
+	});
+	xhr.send();
+}
+
+/**
+ * Brings every watched line's messages up to date (cached ones younger
+ * than ALERT_CACHE_MS are reused), then notifies, pins and tells the watch.
+ */
+// One traffic info check at a time: two overlapping ones could store an
+// older answer over a newer one (and call it new or ended). One asked
+// meanwhile runs once the current one is over.
+let alertRefreshRunning = false;
+let alertRefreshAgain = false;
+
+function refreshAlerts() {
+	if (alertRefreshRunning) {
+		alertRefreshAgain = true;
+		return;
+	}
+	alertRefreshRunning = true;
+	const over = () => {
+		alertRefreshRunning = false;
+		if (alertRefreshAgain) {
+			alertRefreshAgain = false;
+			refreshAlerts();
+		}
+	};
+	try {
+		checkAlerts(over);
+	} catch (error) {
+		over();
+		throw error;
+	}
+}
+
+/** The traffic info check itself; calls `over()` once it is finished. */
+function checkAlerts(over) {
+	const stored = storedConfig();
+	if (!stored || !stored.apiKey) return over();
+	const config = normalizeConfig(stored);
+	const lines = alerts.alertLines(config);
+	if (lines.length === 0) return over();
+	const cache = readJson(ALERTS_KEY, {});
+	const previous = {}; // message id -> { text, lineName }, before this check
+	for (const line of lines) {
+		const entry = cache[line.lineRef];
+		for (const message of (entry && entry.messages) || []) {
+			previous[message.id] = { text: message.text, lineName: line.lineName };
+		}
+	}
+	const now = Date.now();
+	// Lines due a check (no answer for ALERT_CACHE_MS), the least recently
+	// tried (never first) first: a line whose calls keep failing doesn't
+	// keep the others waiting.
+	const tried = readJson(ALERTS_TRIED_KEY, {});
+	const lastTry = (line) => tried[line.lineRef] || 0;
+	const due = lines
+		.filter((line) => {
+			const entry = cache[line.lineRef];
+			return !(entry && now - entry.at < ALERT_CACHE_MS);
+		})
+		.map((line, i) => ({ line: line, i: i }))
+		.sort((a, b) => {
+			const ta = lastTry(a.line);
+			const tb = lastTry(b.line);
+			return ta === tb ? a.i - b.i : ta - tb;
+		})
+		.map((x) => x.line);
+	// lineRef -> why its check failed ("rateLimited" or "network").
+	const failed = {};
+	const finish = () => {
+		try {
+			afterAlertRefresh(config, lines, cache, previous, failed);
+		} finally {
+			over();
+		}
+	};
+	// The user's call guard covers every PRIM call, traffic info included
+	// (the daily quotas stay per endpoint). Only the calls that fit without
+	// starting a pause are made; the other lines wait for the next check,
+	// which takes them first since they are now the least recently checked.
+	const room = callGuardRoom(
+		readJson("stroycommuteCallGuard", null),
+		config.callGuard,
+		now
+	);
+	const toFetch = due.slice(0, room);
+	for (const line of due.slice(toFetch.length)) {
+		failed[line.lineRef] = "rateLimited";
+	}
+	if (toFetch.length === 0 || !checkCallGuard(config, toFetch.length).allowed) {
+		for (const line of toFetch) failed[line.lineRef] = "rateLimited";
+		finish();
+		return;
+	}
+	const nextTried = {};
+	for (const line of lines) {
+		if (tried[line.lineRef]) nextTried[line.lineRef] = tried[line.lineRef];
+	}
+	for (const line of toFetch) nextTried[line.lineRef] = now;
+	localStorage.setItem(ALERTS_TRIED_KEY, JSON.stringify(nextTried));
+	let pending = toFetch.length;
+	for (const line of toFetch) {
+		fetchGeneralMessages(config.apiKey, line.lineRef, (messages) => {
+			if (messages) {
+				cache[line.lineRef] = { at: Date.now(), messages: messages };
+			} else {
+				failed[line.lineRef] = "network";
+			}
+			pending -= 1;
+			if (pending === 0) finish();
+		});
+	}
+}
+
+/**
+ * Second half of refreshAlerts, once every line answered.
+ * @param {Object<string, string>} failed - lineRef -> why its check failed.
+ */
+function afterAlertRefresh(config, lines, cache, previous, failed) {
+	const now = Date.now();
+	const kept = {};
+	const current = [];
+	const lineOf = {};
+	for (const line of lines) {
+		const entry = cache[line.lineRef];
+		if (!entry) continue;
+		kept[line.lineRef] = entry;
+		for (const message of entry.messages) {
+			current.push(message);
+			if (!lineOf[message.id]) lineOf[message.id] = line;
+		}
+	}
+	localStorage.setItem(ALERTS_KEY, JSON.stringify(kept));
+
+	// A line whose check failed with nothing cached can't tell what's new
+	// or over: no notification, pin or end pin from this check.
+	const incomplete = lines.some(
+		(line) => failed[line.lineRef] && !kept[line.lineRef]
+	);
+	if (!incomplete) {
+		const seen = readJson(ALERTS_SEEN_KEY, null);
+		const diff = alerts.diffMessages(seen || {}, current, now, seen === null);
+		localStorage.setItem(ALERTS_SEEN_KEY, JSON.stringify(diff.seen));
+		const texts =
+			ALERT_TEXTS[resolveLanguage(config.language)] || ALERT_TEXTS.fr;
+		const byId = {};
+		for (const message of current) byId[message.id] = message;
+
+		if (
+			config.notifyAlerts &&
+			alerts.inSchedule(config.alertSchedule, new Date(now))
+		) {
+			for (const id of diff.added.slice(0, MAX_NOTIFICATIONS)) {
+				Pebble.showSimpleNotificationOnPebble(
+					`${lineOf[id].lineName} : ${texts.trafficInfo}`,
+					byId[id].text
+				);
+			}
+		}
+		if (config.timelineEnabled) {
+			// Pins every current message not pinned yet -- not just the new ones:
+			// messages first seen while the timeline was off still get theirs once
+			// it's turned on.
+			// Stored per pinned id: its line and text, for the end pin.
+			const pinned = readJson(ALERTS_PINNED_KEY, {});
+			const nowPinned = {};
+			for (const id of Object.keys(byId)) {
+				if (!pinned[id]) {
+					Pebble.insertTimelinePin(
+						alerts.alertPin(byId[id], lineOf[id].lineName, diff.seen[id], texts)
+					);
+				}
+				nowPinned[id] = { lineName: lineOf[id].lineName, text: byId[id].text };
+			}
+			localStorage.setItem(ALERTS_PINNED_KEY, JSON.stringify(nowPinned));
+			// Over: those that just ended, and pinned ones that ended while
+			// the timeline was off (gone from `seen` since).
+			const ended = diff.ended.slice();
+			for (const id of Object.keys(pinned)) {
+				if (!byId[id] && ended.indexOf(id) < 0) ended.push(id);
+			}
+			for (const id of ended) {
+				Pebble.deleteTimelinePin(alerts.pinId(id));
+				const last =
+					previous[id] || (typeof pinned[id] === "object" ? pinned[id] : null);
+				if (last) {
+					Pebble.insertTimelinePin(
+						alerts.endPin(id, last.lineName, last.text, now, texts)
+					);
+				}
+			}
+		}
+	}
+
+	// One alertUpdate per line: its messages whole, most urgent first, with
+	// the line's colours (see alertLines). Messages beyond what one
+	// AppMessage holds follow in more alertUpdates (alertPart 1, 2...), which
+	// the watch appends until it has alertCount messages.
+	const updates = [];
+	for (const line of lines) {
+		const entry = kept[line.lineRef];
+		const messages = entry ? entry.messages : [];
+		const chunks = alerts.alertChunks(messages);
+		const item = {
+			itemType: "alertUpdate",
+			lineRef: line.lineRef,
+			lineName: line.lineName,
+			alertCount: messages.length,
+		};
+		// The messages (if any) are from an earlier check.
+		if (failed[line.lineRef]) item.staleReason = failed[line.lineRef];
+		if (chunks.length) item.alertText = chunks[0];
+		if (line.lineColor) {
+			const colors = watchLineColors(line.lineColor, line.lineTextColor);
+			item.lineColor = colors.color;
+			item.lineTextColor = colors.textColor;
+		}
+		updates.push(item);
+		for (let part = 1; part < chunks.length; part++) {
+			updates.push({
+				itemType: "alertUpdate",
+				lineRef: line.lineRef,
+				lineName: line.lineName,
+				alertCount: messages.length,
+				alertPart: part,
+				alertText: chunks[part],
+			});
+		}
+	}
+	sendAlertUpdates(updates);
+}
+
+// One batch of alertUpdates at a time, so the parts of two checks never
+// interleave on the watch; a batch asked for meanwhile replaces any other
+// waiting one (it is newer) and goes once the current one is done.
+let alertSending = false;
+let alertWaiting = null;
+
+/** @param {object[]} updates - A check's alertUpdates, parts in order. */
+function sendAlertUpdates(updates) {
+	if (alertSending) {
+		alertWaiting = updates;
+		return;
+	}
+	alertSending = true;
+	sendItemsSequentially(updates, 0, undefined, () => {
+		alertSending = false;
+		const next = alertWaiting;
+		alertWaiting = null;
+		if (next) sendAlertUpdates(next);
+	});
 }

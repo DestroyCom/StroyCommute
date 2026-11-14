@@ -7,7 +7,13 @@
 	},
 	"files": {
 		"ignoreUnknown": false,
-		"includes": ["src/**", "config/**", "*.js", "*.json"]
+		"includes": [
+			"src/**",
+			"!src/plugin/plugin.js",
+			"config/**",
+			"*.js",
+			"*.json"
+		]
 	},
 	"formatter": {
 		"enabled": true,
