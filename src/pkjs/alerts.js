@@ -64,26 +64,40 @@ function cleanText(text) {
 
 /**
  * @param {object} config - Normalized config.
- * @returns {{lineRef: string, lineName: string, explicit: boolean}[]} The
- *   lines to check: those added in the alerts section (explicit), then the
- *   lines of the tracked stops, without duplicates.
+ * @returns {{lineRef: string, lineName: string, explicit: boolean,
+ *   lineColor?: string, lineTextColor?: string}[]} The lines to check:
+ *   those added in the alerts section (explicit), then the lines of the
+ *   tracked stops, without duplicates. Colours from the line entry, else
+ *   from a tracked stop on the line (lines saved by older versions have
+ *   none).
  */
 function alertLines(config) {
 	const lines = [];
-	const seen = {};
-	const add = (lineRef, lineName, explicit) => {
-		if (!lineRef || seen[lineRef]) return;
-		seen[lineRef] = true;
-		lines.push({
-			lineRef: lineRef,
-			lineName: lineName || "",
+	const byRef = {};
+	const add = (entry, explicit) => {
+		if (!entry.lineRef) return;
+		const known = byRef[entry.lineRef];
+		if (known) {
+			if (!known.lineColor && entry.lineColor) {
+				known.lineColor = entry.lineColor;
+				known.lineTextColor = entry.lineTextColor;
+			}
+			return;
+		}
+		const line = {
+			lineRef: entry.lineRef,
+			lineName: entry.lineName || "",
 			explicit: explicit,
-		});
+		};
+		if (entry.lineColor) {
+			line.lineColor = entry.lineColor;
+			line.lineTextColor = entry.lineTextColor;
+		}
+		byRef[entry.lineRef] = line;
+		lines.push(line);
 	};
-	for (const line of config.trackedLines || [])
-		add(line.lineRef, line.lineName, true);
-	for (const stop of config.trackedStops || [])
-		add(stop.lineRef, stop.lineName, false);
+	for (const line of config.trackedLines || []) add(line, true);
+	for (const stop of config.trackedStops || []) add(stop, false);
 	return lines;
 }
 

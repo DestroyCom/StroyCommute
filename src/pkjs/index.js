@@ -286,7 +286,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
       searching: "Recherche...",
       searchError: "Erreur de recherche (vérifie ta connexion).",
       noResults: "Aucun résultat.",
-      lineResult: "Ligne {line} ({mode}, {operator})",
+      lineResult: "Ligne {line} · {mode}",
+      lineResultBus: "Ligne {line} · {mode} ({operator})",
       directionUnavailable: "(direction indisponible, réessaie plus tard)",
       alreadyTracked: "Ce trajet est déjà suivi.",
       brokenRow: "Arrêt invalide (ancienne version) -- supprime-le et ré-ajoute-le",
@@ -374,7 +375,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
       searching: "Searching...",
       searchError: "Search failed (check your connection).",
       noResults: "No results.",
-      lineResult: "Line {line} ({mode}, {operator})",
+      lineResult: "Line {line} · {mode}",
+      lineResultBus: "Line {line} · {mode} ({operator})",
       directionUnavailable: "(direction unavailable, try again later)",
       alreadyTracked: "This trip is already followed.",
       brokenRow: "Invalid stop (older version) -- remove it and add it again",
@@ -857,7 +859,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
     var inputEl = document.getElementById(kind + "SearchInput");
     var resultsEl = document.getElementById(kind + "SearchResults");
     var query = inputEl.value.trim();
-    if (query.length < 2) {
+    // Line names are often one character ("A" for RER A, "4" for metro 4).
+    if (query.length < (kind === "line" ? 1 : 2)) {
       resultsEl.innerHTML = "";
       return;
     }
@@ -878,16 +881,56 @@ const CONFIG_HTML = `<!DOCTYPE html>
     // -- avoids breaking the clause's own quoting, not a real injection
     // risk against a read-only public search endpoint, but cheap to do.
     var safeQuery = query.replace(/"/g, "");
-    var field = kind === "stop" ? "stop_name" : "route_long_name";
-    var url = SEARCH_API + "?where=" + encodeURIComponent(field + ' like "' + safeQuery + '"') + "&limit=" + (kind === "stop" ? STOP_RESULTS_FETCHED : 50);
+    var url;
+    if (kind === "stop") {
+      url = SEARCH_API + "?where=" + encodeURIComponent('stop_name like "' + safeQuery + '"') + "&limit=" + STOP_RESULTS_FETCHED;
+    } else {
+      safeQuery = lineSearchName(safeQuery);
+      // Grouped by line: the dataset has one record per stop a line serves.
+      url =
+        SEARCH_API +
+        "?where=" + encodeURIComponent('route_long_name like "' + safeQuery + '"') +
+        "&group_by=" + encodeURIComponent("id,route_long_name,mode,operatorname") +
+        "&limit=50";
+    }
     fetch(url)
       .then((res) => res.json())
       .then((data) => {
-        renderResults(kind, data.results || []);
+        var results = data.results || [];
+        renderResults(kind, kind === "line" ? sortLineResults(results, safeQuery) : results);
       })
       .catch(() => {
         resultsEl.innerHTML = '<div class="searchStatus">' + escapeHtml(t("searchError")) + '</div>';
       });
+  }
+
+  /**
+   * The dataset names lines without their mode: RER A is "A", metro 4 is
+   * "4", tram 3a is "T3a" -- "RER A" would only find the "Remplacement RER
+   * A" bus.
+   * @param {string} query
+   * @returns {string} The query as a dataset line name.
+   */
+  function lineSearchName(query) {
+    var tram = /^tram(way)?\s*(t?)(\S.*)$/i.exec(query);
+    if (tram) return "T" + tram[3];
+    var stripped = query.replace(/^(rer|m[ée]tro|ligne|transilien|train)\s+/i, "");
+    return stripped || query;
+  }
+
+  /**
+   * @param {object[]} results - Line records (grouped by line).
+   * @param {string} name - The searched line name.
+   * @returns {object[]} Exact name first, then rail, metro, tram, the rest.
+   */
+  function sortLineResults(results, name) {
+    var lower = name.toLowerCase();
+    var rank = (r) =>
+      ((r.route_long_name || "").toLowerCase() === lower ? 0 : 10) + (r.mode in MODE_RANK ? MODE_RANK[r.mode] : 3);
+    return results
+      .map((r, i) => ({ r: r, i: i }))
+      .sort((a, b) => rank(a.r) - rank(b.r) || a.i - b.i)
+      .map((x) => x.r);
   }
 
   // A big interchange matches dozens of stop+line records, mostly buses
@@ -1128,7 +1171,10 @@ const CONFIG_HTML = `<!DOCTYPE html>
     results.forEach((r) => {
       var div = document.createElement("div");
       div.className = "searchResultItem";
-      div.textContent = tf("lineResult", { line: r.route_long_name, mode: r.mode, operator: r.operatorname });
+      // The operator only tells apart buses sharing a name (bus "A" vs RER A,
+      // bus "1" vs metro 1); rail lines are all SNCF or RATP.
+      var labelKey = r.mode === "Bus" && r.operatorname ? "lineResultBus" : "lineResult";
+      div.textContent = tf(labelKey, { line: r.route_long_name, mode: modeLabel(r.mode), operator: r.operatorname });
       div.onclick = () => {
         addLineRow({
           lineRef: idfmIdToStif(r.id, "line"),
@@ -1248,12 +1294,18 @@ const CONFIG_HTML = `<!DOCTYPE html>
 
   /** @param {{lineRef: string, lineName: string}} values */
   function addLineRow(values) {
+    // Colours from the line id, so lines saved before they were stored get
+    // them too (the watch's alert banner uses them).
+    var style = lineStyleFor("IDFM:" + (values.lineRef.split(":")[3] || ""));
     var div = document.createElement("div");
     div.className = "row lineRow";
     div.dataset.lineRef = values.lineRef;
     div.dataset.lineName = values.lineName;
+    div.dataset.lineColor = style.color;
+    div.dataset.lineTextColor = style.textColor;
     div.innerHTML =
-      '<span class="rowLabel">' + escapeHtml(tf("lineRow", { line: values.lineName })) + '</span>' +
+      '<span class="rowLabel"><span class="lineSwatch" style="background:' + escapeHtml(style.color) + '"></span>' +
+      escapeHtml(tf("lineRow", { line: values.lineName })) + '</span>' +
       '<button type="button" class="remove" onclick="this.parentElement.remove(); updateCount();">x</button>';
     document.getElementById("linesList").appendChild(div);
     updateCount();
@@ -1322,7 +1374,9 @@ const CONFIG_HTML = `<!DOCTYPE html>
     rows.forEach((row) => {
       result.push({
         lineRef: row.dataset.lineRef,
-        lineName: row.dataset.lineName
+        lineName: row.dataset.lineName,
+        lineColor: row.dataset.lineColor,
+        lineTextColor: row.dataset.lineTextColor
       });
     });
     return result;
@@ -2748,7 +2802,7 @@ function afterAlertRefresh(config, lines, cache, previous, failed) {
 	}
 
 	// One alertUpdate per line: its messages whole, most urgent first, with
-	// the line's colours from a tracked stop on it. Messages beyond what one
+	// the line's colours (see alertLines). Messages beyond what one
 	// AppMessage holds follow in more alertUpdates (alertPart 1, 2...), which
 	// the watch appends until it has alertCount messages.
 	const updates = [];
@@ -2765,9 +2819,8 @@ function afterAlertRefresh(config, lines, cache, previous, failed) {
 		// The messages (if any) are from an earlier check.
 		if (failed[line.lineRef]) item.staleReason = failed[line.lineRef];
 		if (chunks.length) item.alertText = chunks[0];
-		const stop = config.trackedStops.find((s) => s.lineRef === line.lineRef);
-		if (stop) {
-			const colors = watchLineColors(stop.lineColor, stop.lineTextColor);
+		if (line.lineColor) {
+			const colors = watchLineColors(line.lineColor, line.lineTextColor);
 			item.lineColor = colors.color;
 			item.lineTextColor = colors.textColor;
 		}

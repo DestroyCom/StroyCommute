@@ -353,9 +353,26 @@ test("alerts: the watch gets every message whole, ordered, with the line's colou
 	assert.ok(texts.every((t) => !/\/$/.test(t)));
 	assert.strictEqual(rerB.lineColor, watchLineColors("#5291CE", "#FFFFFF").color);
 	assert.strictEqual(rerB.lineTextColor, watchLineColors("#5291CE", "#FFFFFF").textColor);
-	// A line no tracked stop gives colours to: none sent.
+	// A line nothing gives colours to: none sent.
 	const line4 = phone.sent.find((m) => m.itemType === "alertUpdate" && m.lineRef === STOP.lineRef);
 	assert.ok(line4);
+	assert.strictEqual(line4.lineColor, undefined);
+	phone.restore();
+});
+
+test("alerts: a line added without a tracked stop gets its own colours", () => {
+	const { watchLineColors } = require("../src/pkjs/colors");
+	const config = {
+		...ALERT_CONFIG,
+		trackedLines: [{ lineRef: "STIF:Line::C01742:", lineName: "A", lineColor: "#EB2132", lineTextColor: "#FFFFFF" }],
+	};
+	const phone = loadPhone({ storage: new Map([["stroycommuteConfig", JSON.stringify(config)]]) });
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	answerAlerts(phone, {});
+	phone.advance(2000);
+	const rerA = phone.sent.find((m) => m.itemType === "alertUpdate" && m.lineRef === "STIF:Line::C01742:");
+	assert.strictEqual(rerA.lineColor, watchLineColors("#EB2132", "#FFFFFF").color);
+	assert.strictEqual(rerA.lineTextColor, watchLineColors("#EB2132", "#FFFFFF").textColor);
 	phone.restore();
 });
 
