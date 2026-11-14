@@ -361,6 +361,28 @@ test("alerts: more lines than the call guard allows are checked in turns, withou
 	phone.restore();
 });
 
+test("alerts: two checks in a row never interleave their parts", () => {
+	const phone = loadPhone({ storage: new Map([["stroycommuteConfig", JSON.stringify(ALERT_CONFIG)]]) });
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	const answer = gmAnswer("STIF:Line::C01743:", ["1", "2", "3", "4", "5", "6"]);
+	for (const message of answer.Siri.ServiceDelivery.GeneralMessageDelivery[0].InfoMessage) {
+		message.Content.Message[0].MessageText.value = `${message.InfoMessageIdentifier.value} ${"é".repeat(270)}`;
+	}
+	answerAlerts(phone, { "STIF:Line::C01743:": answer });
+	// A second check (answered from the cache) while the first is being sent.
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	phone.advance(10000);
+	const parts = phone.sent
+		.filter((m) => m.itemType === "alertUpdate" && m.lineRef === "STIF:Line::C01743:")
+		.map((m) => m.alertPart || 0);
+	const n = parts.length / 2;
+	assert.ok(n > 1);
+	const once = parts.slice(0, n);
+	assert.deepStrictEqual(parts, once.concat(once));
+	assert.deepStrictEqual(once, once.map((_p, i) => i));
+	phone.restore();
+});
+
 test("alerts: a failed fetch is reported as such, not as no disruption", () => {
 	const phone = loadPhone({ storage: new Map([["stroycommuteConfig", JSON.stringify(ALERT_CONFIG)]]) });
 	phone.fromWatch({ itemType: "refreshAlerts" });

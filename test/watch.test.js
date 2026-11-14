@@ -394,6 +394,25 @@ test("a line's messages sent in parts are all reachable, shown once complete", a
 	watch.restore();
 });
 
+test("parts out of order or repeated never mix two checks' messages", async () => {
+	const watch = await started();
+	const part = (n, text) => ({ itemType: "alertUpdate", lineRef: ALERT2.lineRef, lineName: "4", alertCount: 3, alertPart: n, alertText: text });
+	const first = { ...ALERT2, alertCount: 3, alertText: "Premier message\nSecond message" };
+	// A part skipped: what was gathered is dropped, the late part too.
+	watch.deliver(first);
+	watch.deliver(part(2, "Hors d'ordre"));
+	watch.deliver(part(1, "Troisième message"));
+	assert.ok(!watch.screen().some((s) => /Info trafic/.test(s)));
+	// A first part again restarts the gathering: no page twice.
+	watch.deliver(first);
+	watch.deliver(first);
+	watch.deliver(part(1, "Troisième message"));
+	watch.deliver(part(1, "Troisième message"));
+	watch.press("down");
+	assert.deepStrictEqual(watch.screen()[0], "4  1/3");
+	watch.restore();
+});
+
 test("leaving the screen or new messages bring the alert back to its first page", async () => {
 	const watch = await onAlertScreen();
 	watch.press("select");

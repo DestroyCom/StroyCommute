@@ -1909,21 +1909,26 @@ const CONFIG_SEND_GAP_MS = 200;
  * @param {object[]} items
  * @param {number} index
  * @param {number} [retriesLeft]
+ * @param {function()} [onDone] - Called once every item was sent or given
+ *   up on.
  */
-function sendItemsSequentially(items, index, retriesLeft) {
-	if (index >= items.length) return;
+function sendItemsSequentially(items, index, retriesLeft, onDone) {
+	if (index >= items.length) {
+		if (onDone) onDone();
+		return;
+	}
 	if (retriesLeft === undefined) retriesLeft = MAX_SEND_RETRIES;
 	Pebble.sendAppMessage(
 		items[index],
 		() => {
 			setTimeout(
-				() => sendItemsSequentially(items, index + 1),
+				() => sendItemsSequentially(items, index + 1, undefined, onDone),
 				CONFIG_SEND_GAP_MS
 			);
 		},
 		() => {
 			if (retriesLeft > 0) {
-				sendItemsSequentially(items, index, retriesLeft - 1);
+				sendItemsSequentially(items, index, retriesLeft - 1, onDone);
 			} else {
 				console.log(
 					"sendAppMessage: giving up on item " +
@@ -1932,7 +1937,7 @@ function sendItemsSequentially(items, index, retriesLeft) {
 						MAX_SEND_RETRIES +
 						" retries"
 				);
-				sendItemsSequentially(items, index + 1);
+				sendItemsSequentially(items, index + 1, undefined, onDone);
 			}
 		}
 	);
@@ -2711,5 +2716,26 @@ function afterAlertRefresh(config, lines, cache, previous, failed) {
 			});
 		}
 	}
-	sendItemsSequentially(updates, 0);
+	sendAlertUpdates(updates);
+}
+
+// One batch of alertUpdates at a time, so the parts of two checks never
+// interleave on the watch; a batch asked for meanwhile replaces any other
+// waiting one (it is newer) and goes once the current one is done.
+let alertSending = false;
+let alertWaiting = null;
+
+/** @param {object[]} updates - A check's alertUpdates, parts in order. */
+function sendAlertUpdates(updates) {
+	if (alertSending) {
+		alertWaiting = updates;
+		return;
+	}
+	alertSending = true;
+	sendItemsSequentially(updates, 0, undefined, () => {
+		alertSending = false;
+		const next = alertWaiting;
+		alertWaiting = null;
+		if (next) sendAlertUpdates(next);
+	});
 }

@@ -618,10 +618,20 @@ function handleAlertUpdate(item) {
 	const text = item.alertText ? String(item.alertText).split("\n") : [];
 	let entry;
 	if (item.alertPart) {
-		// A further part of a line's messages: appended to the first part.
+		// A further part of a line's messages: appended to the parts before
+		// it, only in order and for the same count (else dropped: the next
+		// check sends them all again).
 		entry = pendingAlerts.get(item.lineRef);
-		if (!entry) return;
+		if (
+			!entry ||
+			entry.nextPart !== item.alertPart ||
+			entry.count !== (item.alertCount || 0)
+		) {
+			pendingAlerts.delete(item.lineRef);
+			return;
+		}
 		entry.pages = entry.pages.concat(text);
+		entry.nextPart += 1;
 	} else {
 		entry = {
 			lineName: item.lineName,
@@ -631,7 +641,12 @@ function handleAlertUpdate(item) {
 			textColor: item.lineTextColor || "#ffffff",
 			// Set when the last check failed: the messages (if any) are older.
 			stale: typeof item.staleReason === "string",
+			nextPart: 1,
 		};
+	}
+	if (entry.pages.length > entry.count) {
+		pendingAlerts.delete(item.lineRef);
+		return;
 	}
 	// Shown once every message is there (one per page).
 	if (entry.pages.length < entry.count) {
