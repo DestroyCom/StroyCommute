@@ -45,22 +45,30 @@ const trips = (() => {
 		return Number.isNaN(ms) ? null : ms;
 	}
 
+	/** @returns {?number} Epoch ms of a SIRI time field, null if absent/invalid. */
+	function fieldMs(field) {
+		if (!field) return null;
+		const ms = new Date(field).getTime();
+		return Number.isNaN(ms) ? null : ms;
+	}
+
 	/**
 	 * @param {object} call - A SIRI MonitoredCall.
 	 * @returns {number|null} Epoch ms of the departure, else of the arrival,
 	 *   or null. Only for telling whether a train has left: displayed times
 	 *   and the sort stay on callTimeMs (a train can wait at the platform
-	 *   between its arrival and its departure).
+	 *   between its arrival and its departure). Without a realtime departure,
+	 *   the later of the scheduled departure and the realtime arrival: a late
+	 *   train still at the platform isn't expired on its timetable.
 	 */
 	function callDepartureMs(call) {
-		const field =
-			call.ExpectedDepartureTime ||
-			call.AimedDepartureTime ||
-			call.ExpectedArrivalTime ||
-			call.AimedArrivalTime;
-		if (!field) return null;
-		const ms = new Date(field).getTime();
-		return Number.isNaN(ms) ? null : ms;
+		const expected = fieldMs(call.ExpectedDepartureTime);
+		if (expected !== null) return expected;
+		const aimed = fieldMs(call.AimedDepartureTime);
+		const arrival = fieldMs(call.ExpectedArrivalTime);
+		if (aimed === null)
+			return arrival !== null ? arrival : fieldMs(call.AimedArrivalTime);
+		return arrival === null ? aimed : Math.max(aimed, arrival);
 	}
 
 	/**

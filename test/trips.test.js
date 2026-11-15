@@ -143,3 +143,18 @@ test("rankDepartures: a train waiting at the platform past its arrival, before i
 	assert.strictEqual(ranked[0].timeMs, now - 3 * 60000);
 	assert.strictEqual(ranked[0].departMs, now + 2 * 60000);
 });
+
+test("rankDepartures: a late train at the platform isn't expired on its timetable", () => {
+	const { rankDepartures } = require("../src/pkjs/trips");
+	const now = Date.UTC(2026, 10, 14, 8);
+	const at = (offsetMin) => new Date(now + offsetMin * 60000).toISOString();
+	const call = (extra) => ({ MonitoredVehicleJourney: { MonitoredCall: Object.assign({ VehicleAtStop: true }, extra) } });
+	// No realtime departure: the realtime arrival (30 s ago) beats the timetable (5 min ago).
+	const late = rankDepartures([call({ ExpectedArrivalTime: at(-0.5), AimedDepartureTime: at(-5) })], now);
+	assert.strictEqual(late.length, 1);
+	assert.strictEqual(late[0].departMs, now - 30000);
+	// Both long past: gone.
+	assert.strictEqual(rankDepartures([call({ ExpectedArrivalTime: at(-3), AimedDepartureTime: at(-5) })], now).length, 0);
+	// A realtime departure still wins over both.
+	assert.strictEqual(rankDepartures([call({ ExpectedArrivalTime: at(-0.5), ExpectedDepartureTime: at(-2) })], now).length, 0);
+});
