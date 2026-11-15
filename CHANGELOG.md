@@ -8,6 +8,8 @@ with a plain-text version to paste into the store.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-15
+
 ### New
 
 - "Watch screens" setting: stops and alerts, stops only, or alerts only.
