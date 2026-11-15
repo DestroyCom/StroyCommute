@@ -1,0 +1,37 @@
+name: Set up the Pebble SDK
+description: >
+  Installs the pebble tool and a pinned Pebble SDK, so `pebble build` works.
+  Both versions are pinned on purpose: a newer SDK can change how the app
+  behaves on the phone (SDK 4.44 started requiring usesPermissions for
+  network access), so moving to one should be a deliberate change here.
+
+inputs:
+  pebble-tool-version:
+    description: pebble-tool release on PyPI
+    default: "5.2.0"
+  sdk-version:
+    description: Pebble SDK version (`pebble sdk list` shows the installed one)
+    default: "4.44"
+
+runs:
+  using: composite
+  steps:
+    # The pebble tool supports Python 3.10 to 3.13 only.
+    - uses: astral-sh/setup-uv@v5
+      with:
+        python-version: "3.13"
+
+    - name: Install the pebble tool and SDK
+      shell: bash
+      env:
+        PEBBLE_TOOL_VERSION: ${{ inputs.pebble-tool-version }}
+        SDK_VERSION: ${{ inputs.sdk-version }}
+      run: |
+        uv tool install --python 3.13 "pebble-tool==${PEBBLE_TOOL_VERSION}"
+        TOOL_BIN="$(uv tool dir --bin)"
+        echo "${TOOL_BIN}" >> "${GITHUB_PATH}"
+        export PATH="${TOOL_BIN}:${PATH}"
+        # Prints the SDK license notice; nothing is asked interactively.
+        pebble sdk install "${SDK_VERSION}" < /dev/null
+        pebble sdk activate "${SDK_VERSION}"
+        pebble sdk list

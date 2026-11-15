@@ -53,6 +53,9 @@
   .moveButtons { display: flex; gap: 6px; margin-right: auto; }
   .moveBtn { background: #444; padding: 8px 14px; font-size: 15px; line-height: 1; }
   .moveBtn:disabled { opacity: 0.3; }
+  #diagText { width: 100%; margin-top: 8px; padding: 8px; font-family: monospace; font-size: 12px; background: #111; color: #ddd; border: 1px solid #444; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .optionRow { display: block; margin-top: 10px; }
+  .diagButtons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -91,14 +94,21 @@
     <div id="directionPicker"></div>
   </fieldset>
 
-  <!-- Traffic alerts aren't implemented yet (fetchLineAlerts() is a stub on
-       the watch) -- hidden until they are, see ALERTS_ENABLED below. -->
+  <!-- Traffic alerts (PRIM general-message, fetched by pkjs). Hidden when
+       ALERTS_ENABLED below is false. -->
   <div id="alertsSection" hidden>
     <fieldset>
       <legend data-i18n="linesLegend">Lignes suivies (alertes trafic)</legend>
       <div id="linesList"></div>
       <input type="text" id="lineSearchInput" data-i18n-placeholder="lineSearchPlaceholder" placeholder="Rechercher une ligne (ex : 4, RER A)" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceSearch('line')" disabled>
       <div id="lineSearchResults" class="searchResults"></div>
+      <div class="searchStatus" data-i18n="linesHint">Les lignes de tes arrêts suivis sont surveillées automatiquement. Ajoute ici d'autres lignes à surveiller.</div>
+      <label class="optionRow" for="screens" data-i18n="screensLabel">Écrans sur la montre</label>
+      <select id="screens">
+        <option value="both" data-i18n="screensBoth">Arrêts et alertes</option>
+        <option value="stops" data-i18n="screensStops">Arrêts seulement</option>
+        <option value="alerts" data-i18n="screensAlerts">Alertes seulement</option>
+      </select>
     </fieldset>
 
     <fieldset>
@@ -116,11 +126,15 @@
         <label><span data-i18n="scheduleStart">Début</span> <input type="time" id="scheduleStart" value="07:00"></label>
         <label><span data-i18n="scheduleEnd">Fin</span> <input type="time" id="scheduleEnd" value="19:30"></label>
       </div>
+      <label class="optionRow"><input type="checkbox" id="notifyAlerts" checked> <span data-i18n="notifyLabel">Me notifier sur la montre d'une nouvelle perturbation pendant ce créneau</span></label>
+      <label class="optionRow"><input type="checkbox" id="autoOpen"> <span data-i18n="autoOpenLabel">Ouvrir l'app au début du créneau</span></label>
+      <div class="searchStatus" data-i18n="alertsHint">Les alertes sont vérifiées quand l'app est ouverte, toutes les 10 minutes. L'ouverture automatique permet de les vérifier (et d'avoir tes horaires) dès le début du créneau.</div>
     </fieldset>
 
     <fieldset>
       <legend>Timeline</legend>
       <label><input type="checkbox" id="timelineEnabled"> <span data-i18n="timelineLabel">Ajouter les infos IDFM (ex : fin d'incident) à la timeline</span></label>
+      <div class="searchStatus" data-i18n="timelineHint">Autorise aussi la timeline pour StroyCommute dans l'app Pebble (autorisations de l'app), sinon rien n'y apparaît.</div>
     </fieldset>
   </div>
 
@@ -132,6 +146,43 @@
       <label><span data-i18n="guardWindow">W (minutes)</span> <input type="number" id="guardWindow" min="1" step="1" value="10"></label>
       <label><span data-i18n="guardPause">P (pause, minutes)</span> <input type="number" id="guardPause" min="1" step="1" value="15"></label>
     </div>
+    <button type="button" onclick="resetGuard()" data-i18n="guardReset">Lever la pause et tout rafraîchir</button>
+  </fieldset>
+
+  <fieldset>
+    <legend data-i18n="vibrateLegend">Vibration</legend>
+    <label for="vibrateMinutes" data-i18n="vibrateLabel">Vibrer quand le prochain départ est à :</label>
+    <select id="vibrateMinutes">
+      <option value="0" data-i18n="vibrateOff">Jamais</option>
+      <option value="1">1 min</option>
+      <option value="2">2 min</option>
+      <option value="3">3 min</option>
+      <option value="5">5 min</option>
+      <option value="10">10 min</option>
+    </select>
+    <div class="searchStatus" data-i18n="vibrateHint">Seulement quand l'app est ouverte sur l'arrêt concerné, une fois par départ.</div>
+  </fieldset>
+
+  <fieldset>
+    <legend data-i18n="pluginLegend">Cadrans</legend>
+    <label><input type="checkbox" id="pluginEnabled" checked> <span data-i18n="pluginLabel">Partager mes prochains départs avec les cadrans</span></label>
+    <div class="searchStatus" data-i18n="pluginHint">Pour les cadrans compatibles avec les plugins Pebble (aperçu à activer dans l'app Pebble : Réglages, Plugins). Mise à jour toutes les 2 minutes au plus, pour tes 3 premiers trajets, et plus du tout quand il reste moins de 300 appels PRIM dans la journée.</div>
+  </fieldset>
+
+  <!-- Error journal: filled from window.__diagLog (see buildConfigDataUri in
+       src/pkjs/index.js). Stays on the phone; the user copies it by hand. -->
+  <fieldset>
+    <legend data-i18n="diagLegend">Diagnostic</legend>
+    <div class="searchStatus" id="diagSummary"></div>
+    <details class="help" id="diagDetails" hidden>
+      <summary data-i18n="diagShow">Voir le journal</summary>
+      <textarea id="diagText" rows="10" readonly></textarea>
+      <div class="diagButtons">
+        <button type="button" onclick="copyDiag()" data-i18n="diagCopy">Copier</button>
+        <button type="button" class="remove" onclick="clearDiag()" data-i18n="diagClear">Effacer le journal</button>
+      </div>
+      <div class="searchStatus" id="diagCopyStatus"></div>
+    </details>
   </fieldset>
 
   <p id="itemCount"></p>
@@ -141,7 +192,7 @@
   var MAX_ITEMS = 8;
   // Traffic alerts (followed lines, schedule, timeline) aren't implemented
   // on the watch yet: their section stays hidden and no line is saved.
-  var ALERTS_ENABLED = false;
+  var ALERTS_ENABLED = true;
 
   // UI strings. Keep the language list in sync with SUPPORTED_LANGUAGES in
   // src/pkjs/index.js and STRINGS in src/embeddedjs/main.js. "{name}"
@@ -171,12 +222,21 @@
       moveUp: "Monter",
       moveDown: "Descendre",
       linesLegend: "Lignes suivies (alertes trafic)",
+      linesHint: "Les lignes de tes arrêts suivis sont surveillées automatiquement. Ajoute ici d'autres lignes à surveiller.",
+      screensLabel: "Écrans sur la montre",
+      screensBoth: "Arrêts et alertes",
+      screensStops: "Arrêts seulement",
+      screensAlerts: "Alertes seulement",
+      notifyLabel: "Me notifier sur la montre d'une nouvelle perturbation pendant ce créneau",
+      autoOpenLabel: "Ouvrir l'app au début du créneau",
+      alertsHint: "Les alertes sont vérifiées quand l'app est ouverte, toutes les 10 minutes. L'ouverture automatique permet de les vérifier (et d'avoir tes horaires) dès le début du créneau.",
       lineSearchPlaceholder: "Rechercher une ligne (ex : 4, RER A)",
-      scheduleLegend: "Période de réception des alertes",
+      scheduleLegend: "Créneau de trajet (alertes)",
       dayMon: "Lun", dayTue: "Mar", dayWed: "Mer", dayThu: "Jeu", dayFri: "Ven", daySat: "Sam", daySun: "Dim",
       scheduleStart: "Début",
       scheduleEnd: "Fin",
-      timelineLabel: "Ajouter les infos IDFM (ex : fin d'incident) à la timeline",
+      timelineLabel: "Ajouter les perturbations de mes lignes, et leur fin, à la timeline",
+      timelineHint: "Autorise aussi la timeline pour StroyCommute dans l'app Pebble (autorisations de l'app), sinon rien n'y apparaît.",
       save: "Enregistrer",
       keyChecking: "Vérification...",
       keyValid: "Clé valide ✓",
@@ -192,16 +252,35 @@
       allTrains: "tous les trains",
       guardLegend: "Garde-fou appels PRIM",
       guardHint: "Après N appels en W minutes, plus aucun appel pendant P minutes. N = 0 : désactivé.",
+      guardReset: "Lever la pause et tout rafraîchir",
+      guardResetConfirm: "Lever la pause anti-quota et redemander tous les horaires et alertes ? La page se fermera sans enregistrer tes autres modifications.",
       guardMaxCalls: "N (appels max)",
       guardWindow: "W (minutes)",
       guardPause: "P (pause, minutes)",
       guardInvalid: "Garde-fou : N doit être 0 ou au moins 2, W et P au moins 1.",
+      vibrateLegend: "Vibration",
+      vibrateLabel: "Vibrer quand le prochain départ est à :",
+      vibrateOff: "Jamais",
+      vibrateHint: "Seulement quand l'app est ouverte sur l'arrêt concerné, une fois par départ.",
+      pluginLegend: "Cadrans",
+      pluginLabel: "Partager mes prochains départs avec les cadrans",
+      pluginHint: "Pour les cadrans compatibles avec les plugins Pebble (aperçu à activer dans l'app Pebble : Réglages, Plugins). Mise à jour toutes les 2 minutes au plus, pour tes 3 premiers trajets, et plus du tout quand il reste moins de 300 appels PRIM dans la journée.",
+      diagLegend: "Diagnostic",
+      diagNone: "Aucune erreur enregistrée.",
+      diagCount: "{n} erreur(s) enregistrée(s). En cas de souci, copie le journal et envoie-le au développeur.",
+      diagShow: "Voir le journal",
+      diagCopy: "Copier",
+      diagCopied: "Journal copié.",
+      diagCopyFailed: "Copie impossible : sélectionne le texte à la main.",
+      diagClear: "Effacer le journal",
+      diagClearConfirm: "Effacer le journal ? La page se fermera sans enregistrer tes autres modifications.",
       add: "Ajouter",
       cancel: "Annuler",
       searching: "Recherche...",
       searchError: "Erreur de recherche (vérifie ta connexion).",
       noResults: "Aucun résultat.",
-      lineResult: "Ligne {line} ({mode}, {operator})",
+      lineResult: "Ligne {line} · {mode}",
+      lineResultBus: "Ligne {line} · {mode} ({operator})",
       directionUnavailable: "(direction indisponible, réessaie plus tard)",
       alreadyTracked: "Ce trajet est déjà suivi.",
       brokenRow: "Arrêt invalide (ancienne version) -- supprime-le et ré-ajoute-le",
@@ -234,12 +313,21 @@
       moveUp: "Move up",
       moveDown: "Move down",
       linesLegend: "Followed lines (traffic alerts)",
+      linesHint: "The lines of your tracked stops are watched automatically. Add other lines to watch here.",
+      screensLabel: "Watch screens",
+      screensBoth: "Stops and alerts",
+      screensStops: "Stops only",
+      screensAlerts: "Alerts only",
+      notifyLabel: "Notify me on the watch of a new disruption during this window",
+      autoOpenLabel: "Open the app when the window starts",
+      alertsHint: "Alerts are checked while the app is open, every 10 minutes. Opening it automatically checks them (and shows your times) as the window starts.",
       lineSearchPlaceholder: "Search a line (e.g. 4, RER A)",
-      scheduleLegend: "Alert schedule",
+      scheduleLegend: "Commute window (alerts)",
       dayMon: "Mon", dayTue: "Tue", dayWed: "Wed", dayThu: "Thu", dayFri: "Fri", daySat: "Sat", daySun: "Sun",
       scheduleStart: "Start",
       scheduleEnd: "End",
-      timelineLabel: "Add IDFM notices (e.g. end of disruption) to the timeline",
+      timelineLabel: "Add my lines' disruptions, and their end, to the timeline",
+      timelineHint: "Also allow the timeline for StroyCommute in the Pebble app (the app's permissions), or nothing will show there.",
       save: "Save",
       keyChecking: "Checking...",
       keyValid: "Valid key ✓",
@@ -255,16 +343,35 @@
       allTrains: "all trains",
       guardLegend: "PRIM call guard",
       guardHint: "After N calls within W minutes, no call for P minutes. N = 0: disabled.",
+      guardReset: "Lift the pause and refresh everything",
+      guardResetConfirm: "Lift the quota pause and ask again for every time and alert? The page will close without saving your other changes.",
       guardMaxCalls: "N (max calls)",
       guardWindow: "W (minutes)",
       guardPause: "P (pause, minutes)",
       guardInvalid: "Call guard: N must be 0 or at least 2, W and P at least 1.",
+      vibrateLegend: "Vibration",
+      vibrateLabel: "Vibrate when the next departure is:",
+      vibrateOff: "Never",
+      vibrateHint: "Only while the app is open on that stop, once per departure.",
+      pluginLegend: "Watchfaces",
+      pluginLabel: "Share my next departures with watchfaces",
+      pluginHint: "For watchfaces that use Pebble plugins (a preview to turn on in the Pebble app: Settings, Plugins). Updated every 2 minutes at most, for your first 3 trips, and no more once fewer than 300 PRIM calls are left for the day.",
+      diagLegend: "Diagnostics",
+      diagNone: "No error recorded.",
+      diagCount: "{n} error(s) recorded. If something goes wrong, copy the log and send it to the developer.",
+      diagShow: "Show the log",
+      diagCopy: "Copy",
+      diagCopied: "Log copied.",
+      diagCopyFailed: "Can't copy: select the text by hand.",
+      diagClear: "Clear the log",
+      diagClearConfirm: "Clear the log? The page will close without saving your other changes.",
       add: "Add",
       cancel: "Cancel",
       searching: "Searching...",
       searchError: "Search failed (check your connection).",
       noResults: "No results.",
-      lineResult: "Line {line} ({mode}, {operator})",
+      lineResult: "Line {line} · {mode}",
+      lineResultBus: "Line {line} · {mode} ({operator})",
       directionUnavailable: "(direction unavailable, try again later)",
       alreadyTracked: "This trip is already followed.",
       brokenRow: "Invalid stop (older version) -- remove it and add it again",
@@ -326,6 +433,7 @@
   function onLanguageChange() {
     lang = resolveLanguage(document.getElementById("language").value);
     applyStaticTranslations();
+    renderDiag();
     var stops = collectStops();
     var lines = collectLines();
     document.getElementById("stopsList").innerHTML = "";
@@ -746,7 +854,8 @@
     var inputEl = document.getElementById(kind + "SearchInput");
     var resultsEl = document.getElementById(kind + "SearchResults");
     var query = inputEl.value.trim();
-    if (query.length < 2) {
+    // Line names are often one character ("A" for RER A, "4" for metro 4).
+    if (query.length < (kind === "line" ? 1 : 2)) {
       resultsEl.innerHTML = "";
       return;
     }
@@ -767,16 +876,56 @@
     // -- avoids breaking the clause's own quoting, not a real injection
     // risk against a read-only public search endpoint, but cheap to do.
     var safeQuery = query.replace(/"/g, "");
-    var field = kind === "stop" ? "stop_name" : "route_long_name";
-    var url = SEARCH_API + "?where=" + encodeURIComponent(field + ' like "' + safeQuery + '"') + "&limit=" + (kind === "stop" ? STOP_RESULTS_FETCHED : 50);
+    var url;
+    if (kind === "stop") {
+      url = SEARCH_API + "?where=" + encodeURIComponent('stop_name like "' + safeQuery + '"') + "&limit=" + STOP_RESULTS_FETCHED;
+    } else {
+      safeQuery = lineSearchName(safeQuery);
+      // Grouped by line: the dataset has one record per stop a line serves.
+      url =
+        SEARCH_API +
+        "?where=" + encodeURIComponent('route_long_name like "' + safeQuery + '"') +
+        "&group_by=" + encodeURIComponent("id,route_long_name,mode,operatorname") +
+        "&limit=50";
+    }
     fetch(url)
       .then((res) => res.json())
       .then((data) => {
-        renderResults(kind, data.results || []);
+        var results = data.results || [];
+        renderResults(kind, kind === "line" ? sortLineResults(results, safeQuery) : results);
       })
       .catch(() => {
         resultsEl.innerHTML = '<div class="searchStatus">' + escapeHtml(t("searchError")) + '</div>';
       });
+  }
+
+  /**
+   * The dataset names lines without their mode: RER A is "A", metro 4 is
+   * "4", tram 3a is "T3a" -- "RER A" would only find the "Remplacement RER
+   * A" bus.
+   * @param {string} query
+   * @returns {string} The query as a dataset line name.
+   */
+  function lineSearchName(query) {
+    var tram = /^tram(way)?\s*(t?)(\S.*)$/i.exec(query);
+    if (tram) return "T" + tram[3];
+    var stripped = query.replace(/^(rer|m[ée]tro|ligne|transilien|train)\s+/i, "");
+    return stripped || query;
+  }
+
+  /**
+   * @param {object[]} results - Line records (grouped by line).
+   * @param {string} name - The searched line name.
+   * @returns {object[]} Exact name first, then rail, metro, tram, the rest.
+   */
+  function sortLineResults(results, name) {
+    var lower = name.toLowerCase();
+    var rank = (r) =>
+      ((r.route_long_name || "").toLowerCase() === lower ? 0 : 10) + (r.mode in MODE_RANK ? MODE_RANK[r.mode] : 3);
+    return results
+      .map((r, i) => ({ r: r, i: i }))
+      .sort((a, b) => rank(a.r) - rank(b.r) || a.i - b.i)
+      .map((x) => x.r);
   }
 
   // A big interchange matches dozens of stop+line records, mostly buses
@@ -1017,7 +1166,10 @@
     results.forEach((r) => {
       var div = document.createElement("div");
       div.className = "searchResultItem";
-      div.textContent = tf("lineResult", { line: r.route_long_name, mode: r.mode, operator: r.operatorname });
+      // The operator only tells apart buses sharing a name (bus "A" vs RER A,
+      // bus "1" vs metro 1); rail lines are all SNCF or RATP.
+      var labelKey = r.mode === "Bus" && r.operatorname ? "lineResultBus" : "lineResult";
+      div.textContent = tf(labelKey, { line: r.route_long_name, mode: modeLabel(r.mode), operator: r.operatorname });
       div.onclick = () => {
         addLineRow({
           lineRef: idfmIdToStif(r.id, "line"),
@@ -1137,12 +1289,18 @@
 
   /** @param {{lineRef: string, lineName: string}} values */
   function addLineRow(values) {
+    // Colours from the line id, so lines saved before they were stored get
+    // them too (the watch's alert banner uses them).
+    var style = lineStyleFor("IDFM:" + (values.lineRef.split(":")[3] || ""));
     var div = document.createElement("div");
     div.className = "row lineRow";
     div.dataset.lineRef = values.lineRef;
     div.dataset.lineName = values.lineName;
+    div.dataset.lineColor = style.color;
+    div.dataset.lineTextColor = style.textColor;
     div.innerHTML =
-      '<span class="rowLabel">' + escapeHtml(tf("lineRow", { line: values.lineName })) + '</span>' +
+      '<span class="rowLabel"><span class="lineSwatch" style="background:' + escapeHtml(style.color) + '"></span>' +
+      escapeHtml(tf("lineRow", { line: values.lineName })) + '</span>' +
       '<button type="button" class="remove" onclick="this.parentElement.remove(); updateCount();">x</button>';
     document.getElementById("linesList").appendChild(div);
     updateCount();
@@ -1211,7 +1369,9 @@
     rows.forEach((row) => {
       result.push({
         lineRef: row.dataset.lineRef,
-        lineName: row.dataset.lineName
+        lineName: row.dataset.lineName,
+        lineColor: row.dataset.lineColor,
+        lineTextColor: row.dataset.lineTextColor
       });
     });
     return result;
@@ -1225,6 +1385,67 @@
     var maxOk = maxCalls === 0 || maxCalls >= 2;
     if (!maxOk || !(windowMinutes >= 1) || !(pauseMinutes >= 1)) return null;
     return { maxCalls: maxCalls, windowMinutes: windowMinutes, pauseMinutes: pauseMinutes };
+  }
+
+  /**
+   * @param {object[]} entries - Error journal entries (see src/pkjs/diag.js).
+   * @returns {string} One readable block per entry, most recent first.
+   */
+  function formatDiag(entries) {
+    var nl = String.fromCharCode(10); // no backslash escapes: this page is embedded in a template literal
+    return entries.slice().reverse().map((e) => {
+      var lines = [new Date(e.t).toLocaleString() + " [" + (e.src || "?") + "] " + e.w + ": " + e.m];
+      if (e.s) lines.push("  stack: " + e.s);
+      if (e.tr) lines.push("  trail: " + e.tr);
+      if (e.dev) lines.push("  device: " + e.dev);
+      return lines.join(nl);
+    }).join(nl + nl);
+  }
+
+  /** Fills the Diagnostic section from window.__diagLog. */
+  function renderDiag() {
+    var entries = Array.isArray(window.__diagLog) ? window.__diagLog : [];
+    document.getElementById("diagSummary").textContent = entries.length ? tf("diagCount", { n: entries.length }) : t("diagNone");
+    document.getElementById("diagDetails").hidden = entries.length === 0;
+    document.getElementById("diagText").value = formatDiag(entries);
+  }
+
+  /** Copies the journal to the clipboard (webviews vary: two attempts). */
+  function copyDiag() {
+    var area = document.getElementById("diagText");
+    var status = document.getElementById("diagCopyStatus");
+    area.focus();
+    area.select();
+    var copied = false;
+    try {
+      copied = document.execCommand("copy");
+    } catch (_error) {
+      copied = false;
+    }
+    if (copied) {
+      status.textContent = t("diagCopied");
+      return;
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(area.value).then(
+        () => { status.textContent = t("diagCopied"); },
+        () => { status.textContent = t("diagCopyFailed"); }
+      );
+    } else {
+      status.textContent = t("diagCopyFailed");
+    }
+  }
+
+  /** Asks pkjs to clear the journal (closes the page without saving). */
+  function clearDiag() {
+    if (!confirm(t("diagClearConfirm"))) return;
+    document.location = "pebblejs://close#" + encodeURIComponent(JSON.stringify({ action: "clearDiag" }));
+  }
+
+  /** Closes the webview asking pkjs to lift the call guard's pause and refresh. */
+  function resetGuard() {
+    if (!confirm(t("guardResetConfirm"))) return;
+    document.location = "pebblejs://close#" + encodeURIComponent(JSON.stringify({ action: "resetGuard" }));
   }
 
   /** Validates the form, then closes the webview with the config as JSON. */
@@ -1263,6 +1484,11 @@
       },
       timelineEnabled: document.getElementById("timelineEnabled").checked,
       callGuard: callGuard,
+      vibrateMinutes: parseInt(document.getElementById("vibrateMinutes").value, 10) || 0,
+      pluginEnabled: document.getElementById("pluginEnabled").checked,
+      notifyAlerts: document.getElementById("notifyAlerts").checked,
+      autoOpen: document.getElementById("autoOpen").checked,
+      screens: document.getElementById("screens").value,
       language: document.getElementById("language").value
     };
     var json = JSON.stringify(config);
@@ -1280,6 +1506,7 @@
     document.getElementById("language").value = choice;
     lang = resolveLanguage(choice);
     applyStaticTranslations();
+    renderDiag();
     updateCount();
     if (!initial) return;
     document.getElementById("apiKey").value = initial.apiKey || "";
@@ -1299,6 +1526,11 @@
       document.getElementById("scheduleEnd").value = initial.alertSchedule.endTime || "19:30";
     }
     document.getElementById("timelineEnabled").checked = !!initial.timelineEnabled;
+    document.getElementById("vibrateMinutes").value = String(initial.vibrateMinutes || 0);
+    document.getElementById("pluginEnabled").checked = initial.pluginEnabled !== false;
+    document.getElementById("notifyAlerts").checked = initial.notifyAlerts !== false;
+    document.getElementById("autoOpen").checked = !!initial.autoOpen;
+    document.getElementById("screens").value = initial.screens === "stops" || initial.screens === "alerts" ? initial.screens : "both";
     var guard = initial.callGuard || {};
     if (typeof guard.maxCalls === "number") document.getElementById("guardMaxCalls").value = guard.maxCalls;
     if (typeof guard.windowMinutes === "number") document.getElementById("guardWindow").value = guard.windowMinutes;

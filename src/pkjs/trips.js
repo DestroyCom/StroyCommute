@@ -40,6 +40,32 @@ function callTimeMs(call) {
 	return Number.isNaN(ms) ? null : ms;
 }
 
+/** @returns {?number} Epoch ms of a SIRI time field, null if absent/invalid. */
+function fieldMs(field) {
+	if (!field) return null;
+	const ms = new Date(field).getTime();
+	return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * @param {object} call - A SIRI MonitoredCall.
+ * @returns {number|null} Epoch ms of the departure, else of the arrival,
+ *   or null. Only for telling whether a train has left: displayed times
+ *   and the sort stay on callTimeMs (a train can wait at the platform
+ *   between its arrival and its departure). Without a realtime departure,
+ *   the later of the scheduled departure and the realtime arrival: a late
+ *   train still at the platform isn't expired on its timetable.
+ */
+function callDepartureMs(call) {
+	const expected = fieldMs(call.ExpectedDepartureTime);
+	if (expected !== null) return expected;
+	const aimed = fieldMs(call.AimedDepartureTime);
+	const arrival = fieldMs(call.ExpectedArrivalTime);
+	if (aimed === null)
+		return arrival !== null ? arrival : fieldMs(call.AimedArrivalTime);
+	return arrival === null ? aimed : Math.max(aimed, arrival);
+}
+
 /**
  * @param {object} callA - The train's MonitoredCall at A.
  * @param {object} callB - The same train's MonitoredCall at B.
@@ -98,6 +124,84 @@ function filterVisitsServingStop(visitsA, visitsB) {
 function journeyMission(journey) {
 	const note = (journey.JourneyNote || [])[0];
 	return note && note.value ? note.value : "";
+}
+
+/**
+ * @param {object} journey - A SIRI MonitoredVehicleJourney.
+ * @returns {string} Best available destination label, "" if none. SNCF
+ *   (RER/Transilien) journeys don't always carry DestinationDisplay (missing
+ *   or an empty array): fall back to DestinationName, then DirectionName.
+ */
+function journeyDestinationName(journey) {
+	const candidates = [
+		// biome-ignore lint/complexity/useOptionalChain: no `?.` (webpack 1)
+		(journey.MonitoredCall || {}).DestinationDisplay,
+		journey.DestinationName,
+		journey.DirectionName,
+	];
+	for (const list of candidates) {
+		const first = (list || [])[0] || {};
+		if (first.value) return first.value;
+	}
+	return "";
+}
+
+// A train still reported at the platform this long (ms) after its departure
+// time counts as left (see rankDepartures).
+const AT_STOP_LEFT_MS = 60000;
+
+/**
+ * @param {object[]} visits - MonitoredStopVisit list (already filtered for
+ *   an A->B trip).
+ * @param {number} now - Epoch ms.
+ * @returns {{journey: object, atStop: boolean, cancelled: boolean,
+ *   minutes: number, timeMs: ?number, departMs: ?number}[]} The departures with a usable
+ *   time, running trains first (a cancelled one can't hide the real next
+ *   departure), then at-stop first, then by time. `minutes` is floored at 0:
+ *   the expected time can be slightly past before VehicleAtStop flips.
+ */
+function rankDepartures(visits, now) {
+	return (
+		visits
+			.map((visit) => visit && visit.MonitoredVehicleJourney)
+			.filter((journey) => journey && journey.MonitoredCall)
+			.map((journey) => {
+				const call = journey.MonitoredCall;
+				const atStop = call.VehicleAtStop === true;
+				const timeMs = callTimeMs(call);
+				const minutes =
+					timeMs === null ? null : Math.round((timeMs - now) / MINUTE_MS);
+				return {
+					journey: journey,
+					atStop: atStop,
+					cancelled: call.DepartureStatus === "cancelled",
+					minutes: minutes === null ? null : Math.max(0, minutes),
+					timeMs: timeMs,
+					departMs: callDepartureMs(call),
+				};
+			})
+			.filter((d) => d.atStop || d.minutes !== null)
+			// PRIM keeps a train "at the platform" about 2 min past its
+			// departure time (seen at Gare du Nord, RER B): over a minute past
+			// it, it has left and the following one is the next departure.
+			.filter(
+				(d) =>
+					!(
+						d.atStop &&
+						d.departMs !== null &&
+						d.departMs < now - AT_STOP_LEFT_MS
+					)
+			)
+			// Stable sort: running trains first, then trains at the platform, then
+			// by exact time (not the rounded minutes, so close trains keep their
+			// order). An at-stop train without a time stays among the at-stop ones.
+			.sort(
+				(a, b) =>
+					Number(a.cancelled) - Number(b.cancelled) ||
+					Number(b.atStop) - Number(a.atStop) ||
+					(a.atStop ? 0 : a.timeMs - b.timeMs)
+			)
+	);
 }
 
 const DEFAULT_CALL_GUARD = {
@@ -195,6 +299,24 @@ function decideCallGuard(state, settings, now, count) {
 }
 
 /**
+ * @param {?object} state - The stored guard state.
+ * @param {object} [settings] - The user's raw `callGuard` settings.
+ * @param {number} now
+ * @returns {number} How many PRIM calls fit now without starting a pause:
+ *   0 during a pause, Infinity when the guard is off.
+ */
+function callGuardRoom(state, settings, now) {
+	const s = normalizeCallGuard(settings);
+	if (s.maxCalls === 0) return Number.POSITIVE_INFINITY;
+	let pausedUntil = (state && state.pausedUntil) || 0;
+	if (pausedUntil - now > s.pauseMinutes * MINUTE_MS) pausedUntil = 0;
+	if (pausedUntil > now) return 0;
+	const windowStart = now - s.windowMinutes * MINUTE_MS;
+	const calls = ((state && state.calls) || []).filter((t) => t > windowStart);
+	return Math.max(0, s.maxCalls - calls.length);
+}
+
+/**
  * @param {object} [before] - Previously saved raw `callGuard` settings.
  * @param {object} [after] - Newly saved raw `callGuard` settings.
  * @returns {boolean} True when the effective (normalized) settings differ
@@ -232,11 +354,16 @@ function staleExtra(saved, now) {
 }
 
 module.exports = {
+	callTimeMs: callTimeMs,
+	callDepartureMs: callDepartureMs,
+	journeyDestinationName: journeyDestinationName,
+	rankDepartures: rankDepartures,
 	staleExtra: staleExtra,
 	filterVisitsServingStop: filterVisitsServingStop,
 	journeyMission: journeyMission,
 	DEFAULT_CALL_GUARD: DEFAULT_CALL_GUARD,
 	normalizeCallGuard: normalizeCallGuard,
 	decideCallGuard: decideCallGuard,
+	callGuardRoom: callGuardRoom,
 	callGuardSettingsChanged: callGuardSettingsChanged,
 };

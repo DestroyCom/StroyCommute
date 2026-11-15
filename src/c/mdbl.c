@@ -4,6 +4,19 @@ int main(void) {
   Window *w = window_create();
   window_stack_push(w, true);
 
+  // Sizes (bytes) are fixed: past 32 KB in total the engine never grows
+  // them, so they must cover the app's peak. The slot heap holds every JS
+  // object and function: 32 KB stopped being enough at startup once the
+  // traffic alerts were added ("Slot allocation: failed in fixed size
+  // heap", seen in the SDK 4.44 emulator). The app RAM is 128 KB in all,
+  // shared with the UI library and the AppMessage buffers (see `input` /
+  // `output` in src/embeddedjs/main.js) -- and the C heap left over is what
+  // loading the code needs: fxMapArchive mallocs tables that grow with the
+  // code. At 48 KB of slots the app stopped at launch with "fxMapArchive
+  // failed" once the code reached ~31 KB; 40 KB leaves room for both
+  // (checked in the emery and gabbro emulators, startup and every screen).
+  // Growing the watch code further means re-checking both failure modes.
+  //
   // Firmware-managed defaults (chunk/slot/stack left at 0) exhaust the
   // chunk heap on real hardware -- confirmed via `fxAbort memory full`
   // ("Chunk allocation: failed for N bytes") after saving tracked stops in
@@ -15,7 +28,7 @@ int main(void) {
   ModdableCreationRecord cr = {
     .recordSize = sizeof(cr),
     .stack = 6144,
-    .slot = 32768,
+    .slot = 40960,
     .chunk = 32768,
 #ifdef PBL_DEBUG
     // Built with `pebble build --debug`: enable the xsbug JavaScript debugger.
