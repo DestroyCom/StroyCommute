@@ -15,6 +15,34 @@ test("parses the real RER B answer: short texts, ids, end dates", () => {
 	assert.ok(messages.every((m) => m.text.length <= alerts.MAX_TEXT && !m.text.includes("\n")));
 });
 
+test("start dates read from the texts, not end dates nor fractions", () => {
+	const ref = Date.UTC(2026, 10, 12, 15);
+	const start = (text) => alerts.parseStartDate(text, ref);
+	const local = (y, m, d) => new Date(y, m, d).getTime();
+	assert.strictEqual(start("Du 21 novembre au 22 novembre inclus, le trafic sera interrompu"), local(2026, 10, 21));
+	assert.strictEqual(start("Travaux RER B, du lundi 14 au vendredi 18 décembre inclus dès 22:45"), local(2026, 11, 14));
+	assert.strictEqual(start("Mouvement social local les 14 et 15/11 sur le RER B"), local(2026, 10, 14));
+	assert.strictEqual(start("Match de rugby France/Afrique du Sud du 13/11"), local(2026, 10, 13));
+	assert.strictEqual(start("À partir du 1er décembre, travaux"), local(2026, 11, 1));
+	assert.strictEqual(start("Le 5 janvier, travaux"), local(2027, 0, 5));
+	assert.strictEqual(start("Jusqu'au 19 décembre inclus, l'arrêt n'est pas desservi"), null);
+	assert.strictEqual(start("1/3 des trains circulent"), null);
+	assert.strictEqual(start("Le trafic est très perturbé"), null);
+	const parsed = alerts.parseGeneralMessages(fixture("gm-rer-b.json"), "STIF:Line::C01743:");
+	assert.strictEqual(parsed[0].start, local(2026, 10, 21));
+});
+
+test("pin on the eve of a start still ahead; notification at most a few days before", () => {
+	const start = new Date(2026, 10, 21).getTime();
+	const seen = new Date(2026, 10, 14, 14, 30).getTime();
+	assert.strictEqual(alerts.pinTime(start, seen), new Date(2026, 10, 20, 18).getTime());
+	assert.strictEqual(alerts.pinTime(null, seen), seen);
+	assert.strictEqual(alerts.pinTime(new Date(2026, 10, 14).getTime(), seen), seen);
+	assert.strictEqual(alerts.notifyLater(start, seen), true);
+	assert.strictEqual(alerts.notifyLater(start, new Date(2026, 10, 18, 8).getTime()), false);
+	assert.strictEqual(alerts.notifyLater(null, seen), false);
+});
+
 test("an answer without messages, garbage, or another line's message gives nothing", () => {
 	assert.deepStrictEqual(alerts.parseGeneralMessages(fixture("gm-empty.json"), "STIF:Line::C01743:"), []);
 	assert.deepStrictEqual(alerts.parseGeneralMessages(null, "x"), []);

@@ -2647,7 +2647,8 @@ const GENERAL_MESSAGE_URL =
 const ALERTS_KEY = "stroycommuteAlerts"; // lineRef -> { at, messages }
 const ALERTS_SEEN_KEY = "stroycommuteAlertSeen"; // message id -> first seen
 const ALERTS_TRIED_KEY = "stroycommuteAlertTried"; // lineRef -> last call (ms)
-const ALERTS_PINNED_KEY = "stroycommuteAlertPinned"; // message id -> { lineName, text } (true before)
+const ALERTS_PINNED_KEY = "stroycommuteAlertPinned"; // message id -> { lineName, text, time } (true before)
+const ALERTS_NOTIFIED_KEY = "stroycommuteAlertNotified"; // message id -> true
 const ALERT_CACHE_MS = 10 * 60000;
 // Notifications per check, at most (several new messages at once usually
 // mean a network-wide event, and the watch screens list them all anyway).
@@ -2857,17 +2858,38 @@ function afterAlertRefresh(config, lines, cache, previous, failed) {
 		const byId = {};
 		for (const message of current) byId[message.id] = message;
 
-		if (
-			config.notifyAlerts &&
-			alerts.inSchedule(config.alertSchedule, new Date(now))
-		) {
-			for (const id of diff.added.slice(0, MAX_NOTIFICATIONS)) {
+		// A message is notified once, when it appears -- or, announced ahead,
+		// once its start is NOTIFY_LEAD_DAYS away (and in the window).
+		const storedNotified = readJson(ALERTS_NOTIFIED_KEY, null);
+		const notified = {};
+		const due = [];
+		for (const id of Object.keys(byId)) {
+			// Too far ahead: left out of the store, due once it gets close.
+			if (alerts.notifyLater(byId[id].start, now)) continue;
+			const done = storedNotified
+				? storedNotified[id]
+				: // No store yet (first check, or saved by an older version that
+					// notified on appearance): only the new ones are due.
+					diff.added.indexOf(id) < 0;
+			if (done) notified[id] = true;
+			else due.push(id);
+		}
+		const inWindow = alerts.inSchedule(config.alertSchedule, new Date(now));
+		if (config.notifyAlerts && inWindow) {
+			for (const id of due.slice(0, MAX_NOTIFICATIONS)) {
 				Pebble.showSimpleNotificationOnPebble(
 					`${lineOf[id].lineName} : ${texts.trafficInfo}`,
 					byId[id].text
 				);
 			}
 		}
+		// Outside the window, due ones wait for it (if still current then).
+		// Otherwise they count as notified, shown or not (notifications off,
+		// over MAX_NOTIFICATIONS): no backlog later.
+		if (!config.notifyAlerts || inWindow) {
+			for (const id of due) notified[id] = true;
+		}
+		localStorage.setItem(ALERTS_NOTIFIED_KEY, JSON.stringify(notified));
 		if (config.timelineEnabled) {
 			// Pins every current message not pinned yet -- not just the new ones:
 			// messages first seen while the timeline was off still get theirs once
@@ -2876,12 +2898,19 @@ function afterAlertRefresh(config, lines, cache, previous, failed) {
 			const pinned = readJson(ALERTS_PINNED_KEY, {});
 			const nowPinned = {};
 			for (const id of Object.keys(byId)) {
-				if (!pinned[id]) {
+				const time = alerts.pinTime(byId[id].start, diff.seen[id]);
+				// Pinned again when its time moved (pins saved by older versions
+				// all sat at the day the message appeared).
+				if (!pinned[id] || pinned[id].time !== time) {
 					Pebble.insertTimelinePin(
-						alerts.alertPin(byId[id], lineOf[id].lineName, diff.seen[id], texts)
+						alerts.alertPin(byId[id], lineOf[id].lineName, time, texts)
 					);
 				}
-				nowPinned[id] = { lineName: lineOf[id].lineName, text: byId[id].text };
+				nowPinned[id] = {
+					lineName: lineOf[id].lineName,
+					text: byId[id].text,
+					time: time,
+				};
 			}
 			localStorage.setItem(ALERTS_PINNED_KEY, JSON.stringify(nowPinned));
 			// Over: those that just ended, and pinned ones that ended while

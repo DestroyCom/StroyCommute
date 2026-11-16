@@ -8,6 +8,11 @@ with a plain-text version to paste into the store.
 
 ## [Unreleased]
 
+### Improvements
+
+- Planned works announced weeks ahead now show on the timeline the evening before they start, and their notification comes at most 3 days before instead of the day they're announced.
+- A disruption notification that comes in outside your commute window now waits for it instead of being skipped.
+
 ## [2.0.0] - 2026-11-15
 
 ### New

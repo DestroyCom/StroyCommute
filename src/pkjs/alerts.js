@@ -6,13 +6,138 @@
 
 // Longest message text kept (the watch shows a few lines of it).
 const MAX_TEXT = 280;
+// A message announced ahead of its start is notified at most this many days
+// before it (a notification a month ahead is forgotten by then).
+const NOTIFY_LEAD_DAYS = 3;
+// Its timeline pin goes on the eve of its start, at this local hour.
+const EVE_PIN_HOUR = 18;
+const DAY_MS = 24 * 3600000;
+
+const MONTHS = [
+	"janvier",
+	"février",
+	"mars",
+	"avril",
+	"mai",
+	"juin",
+	"juillet",
+	"août",
+	"septembre",
+	"octobre",
+	"novembre",
+	"décembre",
+];
+const WEEKDAY = "(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)\\s+";
+const DAY = "(\\d{1,2})(?:er)?";
+const MONTH_NAME = `(${MONTHS.join("|")}|fevrier|aout|decembre)`;
+// Date forms seen in PRIM texts, each giving [day, month] groups:
+// "du lundi 14 au vendredi 18 décembre" (month after the range), "les 14 et
+// 15/11", "21 novembre", "13/11".
+const DATE_PATTERNS = [
+	{
+		re: new RegExp(
+			`\\bdu\\s+(?:${WEEKDAY})?${DAY}\\s+au\\s+(?:${WEEKDAY})?\\d{1,2}(?:er)?\\s+${MONTH_NAME}`,
+			"gi"
+		),
+		named: true,
+	},
+	{
+		re: new RegExp(
+			`\\bles\\s+(?:${WEEKDAY})?${DAY}\\s+et\\s+(?:${WEEKDAY})?\\d{1,2}\\s*/\\s*(\\d{1,2})\\b`,
+			"gi"
+		),
+	},
+	{ re: new RegExp(`\\b${DAY}\\s+${MONTH_NAME}`, "gi"), named: true },
+	// Numeric dates only after a word introducing one: "1/3 des trains" is
+	// not the 1st of March.
+	{
+		re: new RegExp(
+			`\\b(?:du|le|les|depuis le)\\s+(?:${WEEKDAY})?${DAY}\\s*/\\s*(\\d{1,2})\\b`,
+			"gi"
+		),
+	},
+];
+
+/**
+ * @param {string} text - A message text (French).
+ * @param {number} reference - When the message was written (ms): the date
+ *   is the first one on or after about a month before it.
+ * @returns {?number} Local midnight of the first date the text gives that
+ *   isn't an end ("jusqu'au 19 décembre", "au 22 novembre"), or null.
+ */
+function parseStartDate(text, reference) {
+	let best = null;
+	for (const pattern of DATE_PATTERNS) {
+		pattern.re.lastIndex = 0;
+		let match = pattern.re.exec(text);
+		while (match) {
+			const before = text.slice(Math.max(0, match.index - 20), match.index);
+			const isEnd =
+				/\bau\s+(?:(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)\s+)?$/i.test(
+					before
+				);
+			if (!isEnd && (best === null || match.index < best.index)) {
+				best = {
+					index: match.index,
+					day: match[1],
+					month: match[2],
+					named: pattern.named,
+				};
+			}
+			match = pattern.re.exec(text);
+		}
+	}
+	if (best === null) return null;
+	const day = Number(best.day);
+	const month = best.named
+		? MONTHS.indexOf(
+				best.month
+					.toLowerCase()
+					.replace(/^fevrier$/, "février")
+					.replace(/^aout$/, "août")
+					.replace(/^decembre$/, "décembre")
+			)
+		: Number(best.month) - 1;
+	if (month < 0 || month > 11 || day < 1 || day > 31) return null;
+	const ref = new Date(reference);
+	let start = new Date(ref.getFullYear(), month, day);
+	if (start.getDate() !== day) return null; // 31/11 and the like
+	if (start.getTime() < reference - 31 * DAY_MS) {
+		start = new Date(ref.getFullYear() + 1, month, day);
+	}
+	return start.getTime();
+}
+
+/**
+ * @param {?number} start - A message's start (local midnight), if known.
+ * @param {number} now
+ * @returns {boolean} True while a message starts too far ahead to notify.
+ */
+function notifyLater(start, now) {
+	return typeof start === "number" && start - now > NOTIFY_LEAD_DAYS * DAY_MS;
+}
+
+/**
+ * @param {?number} start - A message's start (local midnight), if known.
+ * @param {number} firstSeen - When the message appeared (ms).
+ * @returns {number} When its pin goes on the timeline: the eve of a start
+ *   still ahead when it appeared, else when it appeared.
+ */
+function pinTime(start, firstSeen) {
+	if (typeof start !== "number" || start <= firstSeen) return firstSeen;
+	const eve = new Date(start);
+	eve.setDate(eve.getDate() - 1);
+	eve.setHours(EVE_PIN_HOUR, 0, 0, 0);
+	return eve.getTime();
+}
 
 /**
  * @param {object} body - A general-message answer.
  * @param {string} lineRef - The line it was asked for.
- * @returns {{id: string, text: string, validUntil: ?number}[]} Its
- *   "Perturbation" messages, short text first, texts cleaned (thin spaces,
- *   repeated spaces) and capped at MAX_TEXT.
+ * @returns {{id: string, text: string, validUntil: ?number,
+ *   start: ?number}[]} Its "Perturbation" messages, short text first, texts
+ *   cleaned (thin spaces, repeated spaces) and capped at MAX_TEXT. `start`
+ *   comes from the text (see parseStartDate): PRIM gives no start time.
  */
 function parseGeneralMessages(body, lineRef) {
 	const delivery =
@@ -38,10 +163,15 @@ function parseGeneralMessages(body, lineRef) {
 		const text = cleanText(pick("SHORT_MESSAGE") || pick("TEXT_ONLY"));
 		if (!id || !text) continue;
 		const until = Date.parse(message.ValidUntilTime || "");
+		const recorded = Date.parse(message.RecordedAtTime || "");
 		out.push({
 			id: id,
 			text: text,
 			validUntil: Number.isNaN(until) ? null : until,
+			start: parseStartDate(
+				text,
+				Number.isNaN(recorded) ? Date.now() : recorded
+			),
 		});
 	}
 	return out;
@@ -161,14 +291,14 @@ function pinId(id, suffix) {
 /**
  * @param {{id: string, text: string, validUntil: ?number}} message
  * @param {string} lineName
- * @param {number} firstSeen - When the message appeared (ms).
+ * @param {number} time - When it goes on the timeline (ms, see pinTime).
  * @param {object} texts - {trafficInfo}.
  * @returns {object} A timeline pin for an active message.
  */
-function alertPin(message, lineName, firstSeen, texts) {
+function alertPin(message, lineName, time, texts) {
 	return {
 		id: pinId(message.id),
-		time: new Date(firstSeen).toISOString(),
+		time: new Date(time).toISOString(),
 		layout: {
 			type: "genericPin",
 			title: lineName,
@@ -269,6 +399,10 @@ module.exports = {
 	utf8Length: utf8Length,
 	alertChunks: alertChunks,
 	MAX_TEXT: MAX_TEXT,
+	NOTIFY_LEAD_DAYS: NOTIFY_LEAD_DAYS,
+	parseStartDate: parseStartDate,
+	notifyLater: notifyLater,
+	pinTime: pinTime,
 	parseGeneralMessages: parseGeneralMessages,
 	alertLines: alertLines,
 	inSchedule: inSchedule,

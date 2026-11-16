@@ -268,8 +268,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const gm = (name) => JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", name), "utf8"));
 
-/** A general-message answer for `lineRef` with messages `ids`. */
-function gmAnswer(lineRef, ids) {
+/**
+ * A general-message answer for `lineRef` with messages `ids`, texted
+ * "Message <id>" unless `texts[id]` says otherwise.
+ */
+function gmAnswer(lineRef, ids, texts = {}) {
 	return {
 		Siri: {
 			ServiceDelivery: {
@@ -278,10 +281,11 @@ function gmAnswer(lineRef, ids) {
 						InfoMessage: ids.map((id) => ({
 							InfoMessageIdentifier: { value: id },
 							InfoChannelRef: { value: "Perturbation" },
+							RecordedAtTime: "2026-11-12T10:00:00.000Z",
 							ValidUntilTime: "2026-12-01T00:00:00.000Z",
 							Content: {
 								LineRef: [{ value: lineRef }],
-								Message: [{ MessageType: "SHORT_MESSAGE", MessageText: { value: `Message ${id}` } }],
+								Message: [{ MessageType: "SHORT_MESSAGE", MessageText: { value: texts[id] || `Message ${id}` } }],
 							},
 						})),
 					},
@@ -339,6 +343,67 @@ test("alerts: a new message notifies and is pinned, an ended one gets an end pin
 	assert.ok(phone.pins.has("alert-b"));
 	assert.deepStrictEqual(phone.deletedPins, ["alert-a"]);
 	assert.strictEqual(phone.pins.get("alert-a-end").layout.subtitle, "Fin de perturbation");
+	phone.restore();
+});
+
+test("alerts: works announced ahead are pinned on their eve and notified a few days before", () => {
+	const storage = new Map([["stroycommuteConfig", JSON.stringify(ALERT_CONFIG)]]);
+	const phone = loadPhone({ storage });
+	const line = "STIF:Line::C01743:";
+	const texts = { w: "Du 21 novembre au 22 novembre inclus, le trafic sera interrompu (travaux)." };
+	const check = (ids) => {
+		phone.fromWatch({ itemType: "refreshAlerts" });
+		answerAlerts(phone, { [line]: gmAnswer(line, ids, texts) });
+	};
+	check(["a"]);
+	phone.advance(11 * 60000);
+	check(["a", "w"]); // appears on the 13th, eight days ahead
+	assert.deepStrictEqual(phone.notifications, []);
+	assert.strictEqual(phone.pins.get("alert-w").time, new Date(2026, 10, 20, 18).toISOString());
+	phone.advance(4 * 24 * 3600000); // the 17th: still more than 3 days ahead
+	check(["a", "w"]);
+	assert.deepStrictEqual(phone.notifications, []);
+	phone.advance(24 * 3600000); // the 18th
+	check(["a", "w"]);
+	assert.deepStrictEqual(phone.notifications, [{ title: "RER B : Info trafic", body: texts.w }]);
+	phone.advance(11 * 60000);
+	check(["a", "w"]);
+	assert.strictEqual(phone.notifications.length, 1);
+	phone.restore();
+});
+
+test("alerts: a due notification outside the schedule waits for it", () => {
+	const night = { ...ALERT_CONFIG, alertSchedule: { days: [0, 1, 2, 3, 4, 5, 6], startTime: "00:00", endTime: "00:01" } };
+	const storage = new Map([["stroycommuteConfig", JSON.stringify(night)]]);
+	const phone = loadPhone({ storage });
+	const line = "STIF:Line::C01743:";
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	answerAlerts(phone, { [line]: gmAnswer(line, []) });
+	phone.advance(11 * 60000);
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	answerAlerts(phone, { [line]: gmAnswer(line, ["b"]) });
+	assert.deepStrictEqual(phone.notifications, []);
+	storage.set("stroycommuteConfig", JSON.stringify(ALERT_CONFIG));
+	phone.advance(11 * 60000);
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	answerAlerts(phone, { [line]: gmAnswer(line, ["b"]) });
+	assert.deepStrictEqual(phone.notifications, [{ title: "RER B : Info trafic", body: "Message b" }]);
+	phone.restore();
+});
+
+test("alerts: pins saved by an older version move to their eve, without a burst of notifications", () => {
+	const line = "STIF:Line::C01743:";
+	const texts = { w: "Du 21 novembre au 22 novembre inclus, travaux." };
+	const storage = new Map([
+		["stroycommuteConfig", JSON.stringify(ALERT_CONFIG)],
+		["stroycommuteAlertSeen", JSON.stringify({ w: Date.UTC(2026, 10, 12), a: Date.UTC(2026, 10, 12) })],
+		["stroycommuteAlertPinned", JSON.stringify({ w: { lineName: "RER B", text: texts.w }, a: { lineName: "RER B", text: "Message a" } })],
+	]);
+	const phone = loadPhone({ storage });
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	answerAlerts(phone, { [line]: gmAnswer(line, ["a", "w"], texts) });
+	assert.strictEqual(phone.pins.get("alert-w").time, new Date(2026, 10, 20, 18).toISOString());
+	assert.deepStrictEqual(phone.notifications, []);
 	phone.restore();
 });
 
