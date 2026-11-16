@@ -252,6 +252,27 @@ test("a launch that stopped during startup is reported at the next one", async (
 	watch.restore();
 });
 
+test("what a launch cut short during startup was doing is in the next one's report", async () => {
+	const storage = new Map();
+	const first = await started([STOP], { storage });
+	first.press("down");
+	first.advance(1000);
+	assert.match(storage.get("diagTrail"), /btn down/);
+	first.restore(); // "frozen" here, still at "ready"
+	const second = await started([STOP], { storage });
+	const reports = second.sent.filter((m) => m.itemType === "diagReport");
+	const entry = JSON.parse(reports[0].diagText)[0];
+	assert.strictEqual(entry.w, "previousLaunch");
+	assert.match(entry.tr, /rx configStop 1 > .*btn down/);
+	// Startup over: the trail is no longer kept in storage.
+	second.advance(21000);
+	assert.ok(!storage.has("diagTrail"));
+	second.press("down");
+	second.advance(2000);
+	assert.ok(!storage.has("diagTrail"));
+	second.restore();
+});
+
 /** A departureUpdate with departure times `m1`/`m2` minutes from now. */
 function timed(watch, m1, m2) {
 	const at = (m) => Math.floor((watch.now + m * 60000) / 1000);

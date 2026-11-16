@@ -100,10 +100,34 @@ const DIAG_MAX_TEXT = 2000;
 
 const trail = [];
 
+// The trail is also saved in storage during startup (see markSession):
+// a launch cut short there is reported at the next one with what it was
+// doing. A second at most between writes, and none once the launch got
+// to "ok" (flash wear): a crash after that isn't detected anyway.
+const DIAG_TRAIL_KEY = "diagTrail";
+const TRAIL_SAVE_DELAY_MS = 1000;
+let trailSaved = true; // while startup lasts, false = a save is scheduled
+let trailSaveTimer = null;
+
+function saveTrail() {
+	trailSaveTimer = null;
+	if (trailSaved === null) return; // startup over
+	storageSet(DIAG_TRAIL_KEY, trail.join(" > "));
+	trailSaved = true;
+}
+
 /** @param {string} event - Short ASCII label, kept in the trail of recent events. */
 function note(event) {
 	trail.push(event);
 	if (trail.length > DIAG_MAX_TRAIL) trail.shift();
+	if (trailSaved === true) {
+		trailSaved = false;
+		try {
+			trailSaveTimer = setTimeout(saveTrail, TRAIL_SAVE_DELAY_MS);
+		} catch {
+			trailSaved = true; // never let diagnostics crash the app
+		}
+	}
 }
 
 /** @returns {string|null} localStorage value, null if missing or unreadable. */
@@ -153,8 +177,9 @@ let diagPending = false;
  * @param {string} where - Entry point that failed.
  * @param {*} message
  * @param {*} [stack]
+ * @param {string} [trailText] - Instead of the current trail.
  */
-function recordDiag(where, message, stack) {
+function recordDiag(where, message, stack, trailText) {
 	try {
 		const log = loadDiagLog();
 		log.push({
@@ -162,7 +187,7 @@ function recordDiag(where, message, stack) {
 			w: where,
 			m: String(message).slice(0, 200),
 			s: stack ? String(stack).slice(0, 300) : "",
-			tr: trail.join(" > "),
+			tr: trailText === undefined ? trail.join(" > ") : trailText,
 		});
 		while (log.length > DIAG_MAX_ENTRIES) log.shift();
 		storageSet(DIAG_LOG_KEY, JSON.stringify(log));
@@ -227,9 +252,12 @@ const previousSession = storageGet(DIAG_SESSION_KEY);
 if (previousSession === "boot" || previousSession === "ready") {
 	recordDiag(
 		"previousLaunch",
-		`stopped at "${previousSession}" (crash, freeze, or closed while loading)`
+		`stopped at "${previousSession}" (crash, freeze, or closed while loading)`,
+		"",
+		storageGet(DIAG_TRAIL_KEY) || ""
 	);
 }
+storageRemove(DIAG_TRAIL_KEY);
 let sessionStage = "";
 
 /** @param {"boot"|"ready"|"ok"|"exit"} stage */
@@ -237,6 +265,13 @@ function markSession(stage) {
 	if (sessionStage === stage) return;
 	sessionStage = stage;
 	storageSet(DIAG_SESSION_KEY, stage);
+	if ((stage === "ok" || stage === "exit") && trailSaved !== null) {
+		// Startup over: the trail is no longer saved, nor kept.
+		trailSaved = null;
+		if (trailSaveTimer !== null) clearTimeout(trailSaveTimer);
+		trailSaveTimer = null;
+		storageRemove(DIAG_TRAIL_KEY);
+	}
 }
 markSession("boot");
 diagPending = loadDiagLog().length > 0;
