@@ -1591,7 +1591,7 @@ function createView() {
 		skin: whiteSkin,
 	});
 	view.banner.visible = false;
-	view.bannerText = null; // created by applyBanner, per text color
+	view.bannerText = null; // the visible one of bannerTexts
 	view.title = label("title", titleStyle);
 	view.line = text("line", bodyStyle);
 	view.lineError = text("line", errorStyle);
@@ -1643,31 +1643,46 @@ function show(name, value) {
 	content.visible = value !== "";
 }
 
+// Banner texts, one per text color and size, created on first use and
+// kept in the banner: switching lines only flips which one is visible.
+// Creating a new one at each switch churned the engine's memory when
+// cycling quickly between lines of different colors.
+const bannerTexts = new Map();
+
 /** @param {?{color: string, textColor: string, text: string}} banner */
 function applyBanner(banner) {
 	const small = !!banner && banner.text.length > LONG_BANNER_CHARS;
-	const look = banner ? `${banner.color}|${banner.textColor}|${small}` : "";
+	const look = banner ? `${banner.textColor}|${small}` : "";
+	if (shown.bannerVisible !== !!banner) {
+		shown.bannerVisible = !!banner;
+		view.banner.visible = !!banner;
+	}
+	if (!banner) return;
+	if (shown.bannerColor !== banner.color) {
+		shown.bannerColor = banner.color;
+		view.banner.skin = skinFor(banner.color);
+	}
 	if (shown.bannerLook !== look) {
 		shown.bannerLook = look;
-		view.banner.visible = !!banner;
-		if (banner) {
-			view.banner.skin = skinFor(banner.color);
-			// A new Text per text color (rare: when switching lines) rather
-			// than restyling one.
-			view.banner.empty();
-			view.bannerText = new Text(null, {
+		let content = bannerTexts.get(look);
+		if (!content) {
+			content = new Text(null, {
 				left: LAYOUT.banner.inset,
 				right: LAYOUT.banner.inset,
 				top: 0,
 				bottom: 0,
 				style: bannerStyle(banner.textColor, small),
-				string: banner.text,
+				string: "",
 			});
-			view.banner.add(view.bannerText);
-			shown.bannerText = banner.text;
+			bannerTexts.set(look, content);
+			view.banner.add(content);
 		}
+		if (view.bannerText) view.bannerText.visible = false;
+		view.bannerText = content;
+		content.visible = true;
+		shown.bannerText = null; // that Text may hold another line's text
 	}
-	if (banner && shown.bannerText !== banner.text) {
+	if (shown.bannerText !== banner.text) {
 		shown.bannerText = banner.text;
 		view.bannerText.string = banner.text;
 	}

@@ -196,6 +196,21 @@ test("cycling quickly asks only for the screen it stops on", async () => {
 	watch.restore();
 });
 
+test("switching between lines of different colors reuses the banner texts", async () => {
+	const RER = { stopRef: "STIF:StopPoint:Q:9:", lineRef: "STIF:Line::C01743:", lineName: "B", stopName: "Gentilly", lineColor: "#5291CE", lineTextColor: "#000000" };
+	const watch = await started([STOP, RER]);
+	const banner = watch.root.contents[0].contents[0];
+	for (let i = 0; i < 6; i++) watch.press("down");
+	assert.strictEqual(banner.contents.length, 2); // one per text color
+	assert.strictEqual(watch.screen()[0], "4 — Bagneux");
+	assert.strictEqual(watch.bannerColor(), "#BE418D");
+	watch.press("down");
+	assert.strictEqual(watch.screen()[0], "B — Gentilly");
+	assert.strictEqual(watch.bannerColor(), "#5291CE");
+	assert.strictEqual(banner.contents.filter((c) => c.visible).length, 1);
+	watch.restore();
+});
+
 test("an exception in a callback is journaled, sent to the phone, and the app goes on", async () => {
 	const watch = await started();
 	// A departureUpdate whose destination isn't a string makes the screen
