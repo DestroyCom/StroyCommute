@@ -36,6 +36,8 @@ test("pin on the eve of a start still ahead; notification at most a few days bef
 	const start = new Date(2026, 10, 21).getTime();
 	const seen = new Date(2026, 10, 14, 14, 30).getTime();
 	assert.strictEqual(alerts.pinTime(start, seen), new Date(2026, 10, 20, 18).getTime());
+	assert.strictEqual(alerts.pinTime(start, seen, { days: 0, time: "07:30" }), new Date(2026, 10, 21, 7, 30).getTime());
+	assert.strictEqual(alerts.pinTime(start, seen, { days: 3, time: "20:00" }), new Date(2026, 10, 18, 20).getTime());
 	assert.strictEqual(alerts.pinTime(null, seen), seen);
 	assert.strictEqual(alerts.pinTime(new Date(2026, 10, 14).getTime(), seen), seen);
 	assert.strictEqual(alerts.notifyLater(start, seen), true);

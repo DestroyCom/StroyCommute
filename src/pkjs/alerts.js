@@ -9,8 +9,9 @@ const MAX_TEXT = 280;
 // A message announced ahead of its start is notified at most this many days
 // before it (a notification a month ahead is forgotten by then).
 const NOTIFY_LEAD_DAYS = 3;
-// Its timeline pin goes on the eve of its start, at this local hour.
-const EVE_PIN_HOUR = 18;
+// Its timeline pin goes this many days before its start, at this local
+// time, unless the settings say otherwise (timelinePinDays/Time).
+const DEFAULT_PIN = { days: 1, time: "18:00" };
 const DAY_MS = 24 * 3600000;
 
 const MONTHS = [
@@ -120,15 +121,20 @@ function notifyLater(start, now) {
 /**
  * @param {?number} start - A message's start (local midnight), if known.
  * @param {number} firstSeen - When the message appeared (ms).
- * @returns {number} When its pin goes on the timeline: the eve of a start
+ * @param {{days: number, time: string}} [when] - How many days before its
+ *   start, and at what local "HH:MM"; DEFAULT_PIN (the eve, 18:00) if
+ *   omitted.
+ * @returns {number} When its pin goes on the timeline: `when` for a start
  *   still ahead when it appeared, else when it appeared.
  */
-function pinTime(start, firstSeen) {
+function pinTime(start, firstSeen, when) {
 	if (typeof start !== "number" || start <= firstSeen) return firstSeen;
-	const eve = new Date(start);
-	eve.setDate(eve.getDate() - 1);
-	eve.setHours(EVE_PIN_HOUR, 0, 0, 0);
-	return eve.getTime();
+	const setting = when || DEFAULT_PIN;
+	const parts = String(setting.time || DEFAULT_PIN.time).split(":");
+	const at = new Date(start);
+	at.setDate(at.getDate() - (setting.days || 0));
+	at.setHours(Number(parts[0]) || 0, Number(parts[1]) || 0, 0, 0);
+	return at.getTime();
 }
 
 /**

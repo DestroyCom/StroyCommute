@@ -372,6 +372,16 @@ test("alerts: works announced ahead are pinned on their eve and notified a few d
 	phone.restore();
 });
 
+test("alerts: the day and time of planned works' pins come from the settings", () => {
+	const config = { ...ALERT_CONFIG, timelinePinDays: 0, timelinePinTime: "07:15" };
+	const phone = loadPhone({ storage: new Map([["stroycommuteConfig", JSON.stringify(config)]]) });
+	const line = "STIF:Line::C01743:";
+	phone.fromWatch({ itemType: "refreshAlerts" });
+	answerAlerts(phone, { [line]: gmAnswer(line, ["w"], { w: "Du 21 novembre au 22 novembre inclus, travaux." }) });
+	assert.strictEqual(phone.pins.get("alert-w").time, new Date(2026, 10, 21, 7, 15).toISOString());
+	phone.restore();
+});
+
 test("alerts: a due notification outside the schedule waits for it", () => {
 	const night = { ...ALERT_CONFIG, alertSchedule: { days: [0, 1, 2, 3, 4, 5, 6], startTime: "00:00", endTime: "00:01" } };
 	const storage = new Map([["stroycommuteConfig", JSON.stringify(night)]]);

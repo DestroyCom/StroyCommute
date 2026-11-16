@@ -145,6 +145,16 @@ const CONFIG_HTML = `<!DOCTYPE html>
       <legend>Timeline</legend>
       <label><input type="checkbox" id="timelineEnabled"> <span data-i18n="timelineLabel">Ajouter les infos IDFM (ex : fin d'incident) à la timeline</span></label>
       <div class="searchStatus" data-i18n="timelineHint">Autorise aussi la timeline pour StroyCommute dans l'app Pebble (autorisations de l'app), sinon rien n'y apparaît.</div>
+      <label for="timelinePinDays" data-i18n="timelinePinLabel">Travaux annoncés à l'avance : les placer sur la timeline</label>
+      <div class="timeRow">
+        <select id="timelinePinDays">
+          <option value="0" data-i18n="timelinePinSameDay">le jour même</option>
+          <option value="1" data-i18n="timelinePinEve" selected>la veille</option>
+          <option value="2" data-i18n="timelinePin2Days">2 jours avant</option>
+          <option value="3" data-i18n="timelinePin3Days">3 jours avant</option>
+        </select>
+        <label><span data-i18n="timelinePinAt">à</span> <input type="time" id="timelinePinTime" value="18:00"></label>
+      </div>
     </fieldset>
   </div>
 
@@ -247,6 +257,12 @@ const CONFIG_HTML = `<!DOCTYPE html>
       scheduleEnd: "Fin",
       timelineLabel: "Ajouter les perturbations de mes lignes, et leur fin, à la timeline",
       timelineHint: "Autorise aussi la timeline pour StroyCommute dans l'app Pebble (autorisations de l'app), sinon rien n'y apparaît.",
+      timelinePinLabel: "Travaux annoncés à l'avance : les placer sur la timeline",
+      timelinePinSameDay: "le jour même",
+      timelinePinEve: "la veille",
+      timelinePin2Days: "2 jours avant",
+      timelinePin3Days: "3 jours avant",
+      timelinePinAt: "à",
       save: "Enregistrer",
       keyChecking: "Vérification...",
       keyValid: "Clé valide ✓",
@@ -338,6 +354,12 @@ const CONFIG_HTML = `<!DOCTYPE html>
       scheduleEnd: "End",
       timelineLabel: "Add my lines' disruptions, and their end, to the timeline",
       timelineHint: "Also allow the timeline for StroyCommute in the Pebble app (the app's permissions), or nothing will show there.",
+      timelinePinLabel: "Works announced ahead: put them on the timeline",
+      timelinePinSameDay: "on the day",
+      timelinePinEve: "the day before",
+      timelinePin2Days: "2 days before",
+      timelinePin3Days: "3 days before",
+      timelinePinAt: "at",
       save: "Save",
       keyChecking: "Checking...",
       keyValid: "Valid key ✓",
@@ -1493,6 +1515,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
         endTime: document.getElementById("scheduleEnd").value
       },
       timelineEnabled: document.getElementById("timelineEnabled").checked,
+      timelinePinDays: parseInt(document.getElementById("timelinePinDays").value, 10) || 0,
+      timelinePinTime: document.getElementById("timelinePinTime").value || "18:00",
       callGuard: callGuard,
       vibrateMinutes: parseInt(document.getElementById("vibrateMinutes").value, 10) || 0,
       pluginEnabled: document.getElementById("pluginEnabled").checked,
@@ -1536,6 +1560,8 @@ const CONFIG_HTML = `<!DOCTYPE html>
       document.getElementById("scheduleEnd").value = initial.alertSchedule.endTime || "19:30";
     }
     document.getElementById("timelineEnabled").checked = !!initial.timelineEnabled;
+    if (typeof initial.timelinePinDays === "number") document.getElementById("timelinePinDays").value = String(initial.timelinePinDays);
+    if (initial.timelinePinTime) document.getElementById("timelinePinTime").value = initial.timelinePinTime;
     document.getElementById("vibrateMinutes").value = String(initial.vibrateMinutes || 0);
     document.getElementById("pluginEnabled").checked = initial.pluginEnabled !== false;
     document.getElementById("notifyAlerts").checked = initial.notifyAlerts !== false;
@@ -2125,6 +2151,15 @@ function normalizeConfig(config) {
 			Math.min(30, Math.floor(Number(config.vibrateMinutes)) || 0)
 		),
 		notifyAlerts: config.notifyAlerts !== false,
+		// Planned works go on the timeline this many days before they start
+		// (0-3), at this local time.
+		timelinePinDays:
+			typeof config.timelinePinDays === "number"
+				? Math.max(0, Math.min(3, Math.floor(config.timelinePinDays)))
+				: 1,
+		timelinePinTime: /^\d{1,2}:\d{2}$/.test(config.timelinePinTime || "")
+			? config.timelinePinTime
+			: "18:00",
 		autoOpen: !!config.autoOpen,
 		screens:
 			config.screens === "stops" || config.screens === "alerts"
@@ -2898,7 +2933,10 @@ function afterAlertRefresh(config, lines, cache, previous, failed) {
 			const pinned = readJson(ALERTS_PINNED_KEY, {});
 			const nowPinned = {};
 			for (const id of Object.keys(byId)) {
-				const time = alerts.pinTime(byId[id].start, diff.seen[id]);
+				const time = alerts.pinTime(byId[id].start, diff.seen[id], {
+					days: config.timelinePinDays,
+					time: config.timelinePinTime,
+				});
 				// Pinned again when its time moved (pins saved by older versions
 				// all sat at the day the message appeared).
 				if (!pinned[id] || pinned[id].time !== time) {
