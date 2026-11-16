@@ -1146,6 +1146,25 @@ function requestRefresh(manual) {
 	flushOutbox();
 }
 
+// Up/Down ask for the screen's data only once the presses stop for this
+// long: cycling quickly through the screens right after launch, while the
+// replies to the first requests and the alerts were coming in, froze the
+// watch (memory, 2026-11-16).
+const STEP_SETTLE_MS = 700;
+let stepTimer = null;
+
+/** Asks for the shown stop's data once Up/Down have been left alone. */
+function refreshOnceSettled() {
+	if (stepTimer !== null) clearTimeout(stepTimer);
+	stepTimer = setTimeout(
+		safe("stepRefresh", () => {
+			stepTimer = null;
+			requestRefresh(false);
+		}),
+		STEP_SETTLE_MS
+	);
+}
+
 /**
  * @param {object} dep - A departures entry.
  * @returns {number} How old it may get before an automatic refresh.
@@ -1465,7 +1484,7 @@ class MainBehavior extends Behavior {
 		selectedIndex = (selectedIndex + direction + items.length) % items.length;
 		alertPage = 0;
 		render();
-		requestRefresh(false);
+		refreshOnceSettled();
 	}
 }
 

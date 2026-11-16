@@ -177,6 +177,22 @@ test("Down cycles to the settings screen with the quota", async () => {
 	watch.restore();
 });
 
+test("cycling quickly asks only for the screen it stops on", async () => {
+	const STOP2 = { ...STOP, stopRef: "STIF:StopPoint:Q:2:", stopName: "Arcueil" };
+	const STOP3 = { ...STOP, stopRef: "STIF:StopPoint:Q:3:", stopName: "Gentilly" };
+	const watch = await started([STOP, STOP2, STOP3]);
+	const asked = () => watch.sent.filter((m) => m.itemType === "refreshStop").map((m) => m.stopRef);
+	const before = asked().length;
+	watch.press("down");
+	watch.advance(300);
+	watch.press("down");
+	watch.advance(699);
+	assert.strictEqual(asked().length, before); // still pressing
+	watch.advance(1);
+	assert.deepStrictEqual(asked().slice(before), [STOP3.stopRef]);
+	watch.restore();
+});
+
 test("an exception in a callback is journaled, sent to the phone, and the app goes on", async () => {
 	const watch = await started();
 	// A departureUpdate whose destination isn't a string makes the screen

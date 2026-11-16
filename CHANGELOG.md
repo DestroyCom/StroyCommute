@@ -13,6 +13,10 @@ with a plain-text version to paste into the store.
 - Planned works announced weeks ahead now show on the timeline shortly before they start (the evening before by default, adjustable in the settings), and their notification comes at most 3 days before instead of the day they're announced.
 - A disruption notification that comes in outside your commute window now waits for it instead of being skipped.
 
+### Fixes
+
+- The watch no longer freezes when you switch screens quickly right after opening the app.
+
 ## [2.0.0] - 2026-11-15
 
 ### New
