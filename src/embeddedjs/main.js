@@ -583,7 +583,7 @@ function onConfigReady() {
 	startRefreshTimer();
 	render();
 	requestRefresh();
-	requestAlerts();
+	requestAlertsSoon();
 	startAlertTimer();
 	run("scheduleCommuteWakeup", scheduleCommuteWakeup);
 	if (sessionStage === "boot") {
@@ -619,6 +619,29 @@ function requestAlerts() {
 	if (stops.length === 0 && alertLines.length === 0) return;
 	alertRequestPending = true;
 	flushOutbox();
+}
+
+// With stops to show, the alerts are asked this long after the config
+// loads: their replies (up to ~1.5 KB each, cut into pages here) no longer
+// arrive with the first departures (watch frozen at launch, 2026-11-16).
+const ALERT_START_DELAY_MS = 3000;
+let alertStartTimer = null;
+
+/** Asks for the alerts once the first departures had time to arrive. */
+function requestAlertsSoon() {
+	if (alertStartTimer !== null) clearTimeout(alertStartTimer);
+	alertStartTimer = null;
+	if (stops.length === 0) {
+		requestAlerts(); // nothing else on screen meanwhile
+		return;
+	}
+	alertStartTimer = setTimeout(
+		safe("alertStart", () => {
+			alertStartTimer = null;
+			requestAlerts();
+		}),
+		ALERT_START_DELAY_MS
+	);
 }
 
 /** Starts the alerts refresh timer, once. */

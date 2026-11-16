@@ -60,6 +60,9 @@ test("a loaded config shows the stop and asks for its departures", async () => {
 	const watch = await started();
 	assert.deepStrictEqual(watch.screen(), ["4 — Bagneux", "...", "Haut / Bas pour changer"]);
 	assert.strictEqual(watch.bannerColor(), "#BE418D");
+	// The alerts a little later, once the departures had time to arrive.
+	assert.ok(!watch.sent.some((m) => m.itemType === "refreshAlerts"));
+	watch.advance(3000);
 	assert.ok(watch.sent.some((m) => m.itemType === "refreshAlerts"));
 	assert.deepStrictEqual(watch.sent.filter((m) => m.itemType === "refreshStop").at(-1), {
 		itemType: "refreshStop",
@@ -408,6 +411,7 @@ test("a line added in the alerts section always has a screen", async () => {
 test("alerts are asked again every 10 minutes", async () => {
 	const watch = await started();
 	const asks = () => watch.sent.filter((m) => m.itemType === "refreshAlerts").length;
+	watch.advance(3000); // the first one, after launch
 	const before = asks();
 	watch.advance(10 * 60000);
 	assert.strictEqual(asks(), before + 1);

@@ -2036,8 +2036,10 @@ const CONFIG_SEND_GAP_MS = 200;
  * @param {number} [retriesLeft]
  * @param {function()} [onDone] - Called once every item was sent or given
  *   up on.
+ * @param {number} [gap] - Pause after each acked item, CONFIG_SEND_GAP_MS
+ *   by default.
  */
-function sendItemsSequentially(items, index, retriesLeft, onDone) {
+function sendItemsSequentially(items, index, retriesLeft, onDone, gap) {
 	if (index >= items.length) {
 		if (onDone) onDone();
 		return;
@@ -2047,13 +2049,13 @@ function sendItemsSequentially(items, index, retriesLeft, onDone) {
 		items[index],
 		() => {
 			setTimeout(
-				() => sendItemsSequentially(items, index + 1, undefined, onDone),
-				CONFIG_SEND_GAP_MS
+				() => sendItemsSequentially(items, index + 1, undefined, onDone, gap),
+				gap || CONFIG_SEND_GAP_MS
 			);
 		},
 		() => {
 			if (retriesLeft > 0) {
-				sendItemsSequentially(items, index, retriesLeft - 1, onDone);
+				sendItemsSequentially(items, index, retriesLeft - 1, onDone, gap);
 			} else {
 				console.log(
 					"sendAppMessage: giving up on item " +
@@ -2062,7 +2064,7 @@ function sendItemsSequentially(items, index, retriesLeft, onDone) {
 						MAX_SEND_RETRIES +
 						" retries"
 				);
-				sendItemsSequentially(items, index + 1, undefined, onDone);
+				sendItemsSequentially(items, index + 1, undefined, onDone, gap);
 			}
 		}
 	);
@@ -3013,6 +3015,9 @@ function afterAlertRefresh(config, lines, cache, previous, failed) {
 // waiting one (it is newer) and goes once the current one is done.
 let alertSending = false;
 let alertWaiting = null;
+// Wider than the config's gap: each alertUpdate is the watch's heaviest
+// message to handle (its text is cut into pages there).
+const ALERT_SEND_GAP_MS = 500;
 
 /** @param {object[]} updates - A check's alertUpdates, parts in order. */
 function sendAlertUpdates(updates) {
@@ -3021,10 +3026,16 @@ function sendAlertUpdates(updates) {
 		return;
 	}
 	alertSending = true;
-	sendItemsSequentially(updates, 0, undefined, () => {
-		alertSending = false;
-		const next = alertWaiting;
-		alertWaiting = null;
-		if (next) sendAlertUpdates(next);
-	});
+	sendItemsSequentially(
+		updates,
+		0,
+		undefined,
+		() => {
+			alertSending = false;
+			const next = alertWaiting;
+			alertWaiting = null;
+			if (next) sendAlertUpdates(next);
+		},
+		ALERT_SEND_GAP_MS
+	);
 }
