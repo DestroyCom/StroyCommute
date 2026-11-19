@@ -1,7 +1,7 @@
 // StroyCommute's plugin: the next departures of the trips tracked in the
 // app's settings, as the source transit/departure, so any watchface (or
-// Index) can show them. Pebble app plugins are a preview feature: the
-// plugin only runs while something reads its source, and is started fresh
+// Index) can show them. Pebble app plugins are on for everyone since
+// app 2.0.0: the plugin only runs while something reads its source, and is started fresh
 // for each request (state lives in localStorage, shared with pkjs).
 //
 // This file is the plugin's own code. The script the SDK bundles,

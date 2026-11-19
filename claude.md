@@ -113,8 +113,8 @@ files under `/mnt/d`.
   runs, i.e. while the app is open. To do work at a given time with the app
   closed, schedule a watch wakeup (`pebble/wakeup`), which relaunches the
   app.
-  The one exception is the app's plugin (`src/plugin/`, Pebble app plugins
-  preview): it runs while a watchface or Index reads its
+  The one exception is the app's plugin (`src/plugin/`, Pebble app plugins,
+  on for everyone since app 2.0.0): it runs while a watchface or Index reads its
   `transit/departure` source, possibly all day. It has its own quota
   budget, which must stay at least this strict: shared call guard and
   daily count, one fetch per trip per 2 minutes, 3 trips at most, no fetch
@@ -197,3 +197,6 @@ into the appstore. Keeping it up to date is Claude's job, not the user's:
 - Direct code, no over-explaining, but don't sacrifice readability for
   brevity either
 - Code & Comments in English, but speaks with the user with his preferred language like French
+- English is the project's default language, with French support: user-facing
+  default texts, permission `reason`s in `package.json` and store copy are
+  written in English first, French being a translation.

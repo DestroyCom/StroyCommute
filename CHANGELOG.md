@@ -8,6 +8,10 @@ with a plain-text version to paste into the store.
 
 ## [Unreleased]
 
+### Improvements
+
+- Pebble plugins are now on for everyone in the Pebble app, so the settings no longer ask you to turn them on; the permission explanations shown by the Pebble app are now in English.
+
 ## [2.0.0] - 2026-11-15
 
 ### New

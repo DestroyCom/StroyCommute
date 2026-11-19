@@ -95,7 +95,7 @@
 						"prim.iledefrance-mobilites.fr"
 					]
 				},
-				"reason": "Pour récupérer les prochains passages en temps réel (API PRIM d'Île-de-France Mobilités)",
+				"reason": "To fetch real-time next departures (Île-de-France Mobilités PRIM API)",
 				"required": true
 			},
 			{
@@ -105,17 +105,17 @@
 						"data.iledefrance-mobilites.fr"
 					]
 				},
-				"reason": "Pour chercher les arrêts et les lignes dans les réglages",
+				"reason": "To search for stops and lines in the settings",
 				"required": true
 			},
 			{
 				"name": "ShowNotifications",
-				"reason": "Pour te prévenir d'une nouvelle perturbation sur tes lignes, pendant ton créneau",
+				"reason": "To alert you to a new disruption on your lines during your commute window",
 				"required": false
 			},
 			{
 				"name": "Timeline",
-				"reason": "Pour ajouter les perturbations de tes lignes et leur fin à la timeline, si tu l'actives",
+				"reason": "To add disruptions on your lines, and their end, to the timeline if you turn it on",
 				"required": false
 			}
 		],
