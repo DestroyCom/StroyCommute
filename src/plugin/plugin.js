@@ -416,6 +416,19 @@ const TEXTS = {
 	en: { atStop: "At stop", towards: "To", minutes: "min" },
 };
 
+/**
+ * @returns {string} "fr" or "en": the setting's own choice, else (setting on
+ *   "auto") the phone's language, English by default.
+ */
+function pluginLanguage(config) {
+	if (config.language === "fr" || config.language === "en") return config.language;
+	const locale =
+		typeof navigator !== "undefined" && navigator.language
+			? navigator.language
+			: "";
+	return locale.slice(0, 2).toLowerCase() === "fr" ? "fr" : "en";
+}
+
 /** @returns {*} The parsed localStorage value, `fallback` if missing/garbled. */
 function readJson(key, fallback) {
 	try {
@@ -667,7 +680,7 @@ Pebble.registerSourceHandler(async (request, respond) => {
 		respond.data({ validUntilMs: now + MIN_FETCH_MS, instances: [] });
 		return;
 	}
-	const texts = config.language === "en" ? TEXTS.en : TEXTS.fr;
+	const texts = pluginLanguage(config) === "fr" ? TEXTS.fr : TEXTS.en;
 	const stops = (config.trackedStops || []).slice(0, MAX_TRIPS);
 	const cache = readJson(CACHE_KEY, {});
 	const results = await Promise.all(

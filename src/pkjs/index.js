@@ -9,7 +9,7 @@
 // `require("fs")` and the next line, well before any Pebble.* listener
 // ever ran. Keep config/index.html and this constant in sync by hand.
 const CONFIG_HTML = `<!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -72,34 +72,34 @@ const CONFIG_HTML = `<!DOCTYPE html>
   <h2>StroyCommute</h2>
 
   <fieldset>
-    <legend data-i18n="languageLegend">Langue</legend>
+    <legend data-i18n="languageLegend">Language</legend>
     <select id="language" onchange="onLanguageChange()">
-      <option value="auto" data-i18n="languageAuto">Automatique (langue de la montre)</option>
+      <option value="auto" data-i18n="languageAuto">Automatic (watch language)</option>
       <option value="fr">Français</option>
       <option value="en">English</option>
     </select>
   </fieldset>
 
   <fieldset>
-    <legend data-i18n="apiKeyLegend">Clé API PRIM</legend>
-    <input type="text" id="apiKey" data-i18n-placeholder="apiKeyPlaceholder" placeholder="Clé API" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceValidateKey()">
+    <legend data-i18n="apiKeyLegend">PRIM API key</legend>
+    <input type="text" id="apiKey" data-i18n-placeholder="apiKeyPlaceholder" placeholder="API key" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceValidateKey()">
     <div id="apiKeyStatus" class="keyStatus"></div>
     <details class="help">
-      <summary data-i18n="keyHelpTitle">Comment obtenir une clé API PRIM ?</summary>
+      <summary data-i18n="keyHelpTitle">How do I get a PRIM API key?</summary>
       <ol>
-        <li data-i18n-html="keyHelp1"></li>
-        <li data-i18n-html="keyHelp2"></li>
-        <li data-i18n-html="keyHelp3"></li>
-        <li data-i18n-html="keyHelp4"></li>
+        <li data-i18n-html="keyHelp1">Create a free account on <a href="https://prim.iledefrance-mobilites.fr" target="_blank" rel="noopener">prim.iledefrance-mobilites.fr</a> (Île-de-France Mobilités) and confirm your e-mail address.</li>
+        <li data-i18n-html="keyHelp2">Sign in, open the API catalog and pick “Prochains passages” (next departures at a stop or on a line).</li>
+        <li data-i18n-html="keyHelp3">Subscribe to that API: it is free, no payment is asked.</li>
+        <li data-i18n-html="keyHelp4">In your account settings, generate your API key (token), copy it and paste it in the field above.</li>
       </ol>
-      <div class="searchStatus" data-i18n="keyHelpNote"></div>
+      <div class="searchStatus" data-i18n="keyHelpNote">The key stays on your phone: it is never sent to the watch. A new key is limited to about 1,000 requests per day. PRIM portal labels may change.</div>
     </details>
   </fieldset>
 
   <fieldset>
-    <legend data-i18n="stopsLegend">Arrêts suivis (départs)</legend>
+    <legend data-i18n="stopsLegend">Followed stops (departures)</legend>
     <div id="stopsList"></div>
-    <input type="text" id="stopSearchInput" data-i18n-placeholder="stopSearchPlaceholder" placeholder="Rechercher un arrêt (ex : Châtelet)" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceSearch('stop')" disabled>
+    <input type="text" id="stopSearchInput" data-i18n-placeholder="stopSearchPlaceholder" placeholder="Search a stop (e.g. Châtelet)" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceSearch('stop')" disabled>
     <div id="stopSearchResults" class="searchResults"></div>
     <div id="directionPicker"></div>
   </fieldset>
@@ -108,95 +108,95 @@ const CONFIG_HTML = `<!DOCTYPE html>
        ALERTS_ENABLED below is false. -->
   <div id="alertsSection" hidden>
     <fieldset>
-      <legend data-i18n="linesLegend">Lignes suivies (alertes trafic)</legend>
+      <legend data-i18n="linesLegend">Followed lines (traffic alerts)</legend>
       <div id="linesList"></div>
-      <input type="text" id="lineSearchInput" data-i18n-placeholder="lineSearchPlaceholder" placeholder="Rechercher une ligne (ex : 4, RER A)" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceSearch('line')" disabled>
+      <input type="text" id="lineSearchInput" data-i18n-placeholder="lineSearchPlaceholder" placeholder="Search a line (e.g. 4, RER A)" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" oninput="debounceSearch('line')" disabled>
       <div id="lineSearchResults" class="searchResults"></div>
-      <div class="searchStatus" data-i18n="linesHint">Les lignes de tes arrêts suivis sont surveillées automatiquement. Ajoute ici d'autres lignes à surveiller.</div>
-      <label class="optionRow" for="screens" data-i18n="screensLabel">Écrans sur la montre</label>
+      <div class="searchStatus" data-i18n="linesHint">The lines of your tracked stops are watched automatically. Add other lines to watch here.</div>
+      <label class="optionRow" for="screens" data-i18n="screensLabel">Watch screens</label>
       <select id="screens">
-        <option value="both" data-i18n="screensBoth">Arrêts et alertes</option>
-        <option value="stops" data-i18n="screensStops">Arrêts seulement</option>
-        <option value="alerts" data-i18n="screensAlerts">Alertes seulement</option>
+        <option value="both" data-i18n="screensBoth">Stops and alerts</option>
+        <option value="stops" data-i18n="screensStops">Stops only</option>
+        <option value="alerts" data-i18n="screensAlerts">Alerts only</option>
       </select>
     </fieldset>
 
     <fieldset>
-      <legend data-i18n="scheduleLegend">Période de réception des alertes</legend>
+      <legend data-i18n="scheduleLegend">Commute window (alerts)</legend>
       <div class="dayRow">
-        <label><input type="checkbox" class="dayBox" value="1" checked> <span data-i18n="dayMon">Lun</span></label>
-        <label><input type="checkbox" class="dayBox" value="2" checked> <span data-i18n="dayTue">Mar</span></label>
-        <label><input type="checkbox" class="dayBox" value="3" checked> <span data-i18n="dayWed">Mer</span></label>
-        <label><input type="checkbox" class="dayBox" value="4" checked> <span data-i18n="dayThu">Jeu</span></label>
-        <label><input type="checkbox" class="dayBox" value="5" checked> <span data-i18n="dayFri">Ven</span></label>
-        <label><input type="checkbox" class="dayBox" value="6"> <span data-i18n="daySat">Sam</span></label>
-        <label><input type="checkbox" class="dayBox" value="0"> <span data-i18n="daySun">Dim</span></label>
+        <label><input type="checkbox" class="dayBox" value="1" checked> <span data-i18n="dayMon">Mon</span></label>
+        <label><input type="checkbox" class="dayBox" value="2" checked> <span data-i18n="dayTue">Tue</span></label>
+        <label><input type="checkbox" class="dayBox" value="3" checked> <span data-i18n="dayWed">Wed</span></label>
+        <label><input type="checkbox" class="dayBox" value="4" checked> <span data-i18n="dayThu">Thu</span></label>
+        <label><input type="checkbox" class="dayBox" value="5" checked> <span data-i18n="dayFri">Fri</span></label>
+        <label><input type="checkbox" class="dayBox" value="6"> <span data-i18n="daySat">Sat</span></label>
+        <label><input type="checkbox" class="dayBox" value="0"> <span data-i18n="daySun">Sun</span></label>
       </div>
       <div class="timeRow">
-        <label><span data-i18n="scheduleStart">Début</span> <input type="time" id="scheduleStart" value="07:00"></label>
-        <label><span data-i18n="scheduleEnd">Fin</span> <input type="time" id="scheduleEnd" value="19:30"></label>
+        <label><span data-i18n="scheduleStart">Start</span> <input type="time" id="scheduleStart" value="07:00"></label>
+        <label><span data-i18n="scheduleEnd">End</span> <input type="time" id="scheduleEnd" value="19:30"></label>
       </div>
-      <label class="optionRow"><input type="checkbox" id="notifyAlerts" checked> <span data-i18n="notifyLabel">Me notifier sur la montre d'une nouvelle perturbation pendant ce créneau</span></label>
-      <label class="optionRow"><input type="checkbox" id="autoOpen"> <span data-i18n="autoOpenLabel">Ouvrir l'app au début du créneau</span></label>
-      <div class="searchStatus" data-i18n="alertsHint">Les alertes sont vérifiées quand l'app est ouverte, toutes les 10 minutes. L'ouverture automatique permet de les vérifier (et d'avoir tes horaires) dès le début du créneau.</div>
+      <label class="optionRow"><input type="checkbox" id="notifyAlerts" checked> <span data-i18n="notifyLabel">Notify me on the watch of a new disruption during this window</span></label>
+      <label class="optionRow"><input type="checkbox" id="autoOpen"> <span data-i18n="autoOpenLabel">Open the app when the window starts</span></label>
+      <div class="searchStatus" data-i18n="alertsHint">Alerts are checked while the app is open, every 10 minutes. Opening it automatically checks them (and shows your times) as the window starts.</div>
     </fieldset>
 
     <fieldset>
       <legend>Timeline</legend>
-      <label><input type="checkbox" id="timelineEnabled"> <span data-i18n="timelineLabel">Ajouter les infos IDFM (ex : fin d'incident) à la timeline</span></label>
-      <div class="searchStatus" data-i18n="timelineHint">Autorise aussi la timeline pour StroyCommute dans l'app Pebble (autorisations de l'app), sinon rien n'y apparaît.</div>
+      <label><input type="checkbox" id="timelineEnabled"> <span data-i18n="timelineLabel">Add my lines' disruptions, and their end, to the timeline</span></label>
+      <div class="searchStatus" data-i18n="timelineHint">Also allow the timeline for StroyCommute in the Pebble app (the app's permissions), or nothing will show there.</div>
     </fieldset>
   </div>
 
   <fieldset>
-    <legend data-i18n="guardLegend">Garde-fou appels PRIM</legend>
-    <div class="searchStatus" data-i18n="guardHint">Après N appels en W minutes, plus aucun appel pendant P minutes. N = 0 : désactivé.</div>
+    <legend data-i18n="guardLegend">PRIM call guard</legend>
+    <div class="searchStatus" data-i18n="guardHint">After N calls within W minutes, no call for P minutes. N = 0: disabled.</div>
     <div class="timeRow">
-      <label><span data-i18n="guardMaxCalls">N (appels max)</span> <input type="number" id="guardMaxCalls" min="0" step="1" value="40"></label>
+      <label><span data-i18n="guardMaxCalls">N (max calls)</span> <input type="number" id="guardMaxCalls" min="0" step="1" value="40"></label>
       <label><span data-i18n="guardWindow">W (minutes)</span> <input type="number" id="guardWindow" min="1" step="1" value="10"></label>
       <label><span data-i18n="guardPause">P (pause, minutes)</span> <input type="number" id="guardPause" min="1" step="1" value="15"></label>
     </div>
-    <button type="button" onclick="resetGuard()" data-i18n="guardReset">Lever la pause et tout rafraîchir</button>
+    <button type="button" onclick="resetGuard()" data-i18n="guardReset">Lift the pause and refresh everything</button>
   </fieldset>
 
   <fieldset>
     <legend data-i18n="vibrateLegend">Vibration</legend>
-    <label for="vibrateMinutes" data-i18n="vibrateLabel">Vibrer quand le prochain départ est à :</label>
+    <label for="vibrateMinutes" data-i18n="vibrateLabel">Vibrate when the next departure is:</label>
     <select id="vibrateMinutes">
-      <option value="0" data-i18n="vibrateOff">Jamais</option>
+      <option value="0" data-i18n="vibrateOff">Never</option>
       <option value="1">1 min</option>
       <option value="2">2 min</option>
       <option value="3">3 min</option>
       <option value="5">5 min</option>
       <option value="10">10 min</option>
     </select>
-    <div class="searchStatus" data-i18n="vibrateHint">Seulement quand l'app est ouverte sur l'arrêt concerné, une fois par départ.</div>
+    <div class="searchStatus" data-i18n="vibrateHint">Only while the app is open on that stop, once per departure.</div>
   </fieldset>
 
   <fieldset>
-    <legend data-i18n="pluginLegend">Cadrans</legend>
-    <label><input type="checkbox" id="pluginEnabled" checked> <span data-i18n="pluginLabel">Partager mes prochains départs avec les cadrans</span></label>
-    <div class="searchStatus" data-i18n="pluginHint">Pour les cadrans compatibles avec les plugins Pebble. Mise à jour toutes les 2 minutes au plus, pour tes 3 premiers trajets, et plus du tout quand il reste moins de 300 appels PRIM dans la journée.</div>
+    <legend data-i18n="pluginLegend">Watchfaces</legend>
+    <label><input type="checkbox" id="pluginEnabled" checked> <span data-i18n="pluginLabel">Share my next departures with watchfaces</span></label>
+    <div class="searchStatus" data-i18n="pluginHint">For watchfaces that use Pebble plugins. Updated every 2 minutes at most, for your first 3 trips, and no more once fewer than 300 PRIM calls are left for the day.</div>
   </fieldset>
 
   <!-- Error journal: filled from window.__diagLog (see buildConfigDataUri in
        src/pkjs/index.js). Stays on the phone; the user copies it by hand. -->
   <fieldset>
-    <legend data-i18n="diagLegend">Diagnostic</legend>
+    <legend data-i18n="diagLegend">Diagnostics</legend>
     <div class="searchStatus" id="diagSummary"></div>
     <details class="help" id="diagDetails" hidden>
-      <summary data-i18n="diagShow">Voir le journal</summary>
+      <summary data-i18n="diagShow">Show the log</summary>
       <textarea id="diagText" rows="10" readonly></textarea>
       <div class="diagButtons">
-        <button type="button" onclick="copyDiag()" data-i18n="diagCopy">Copier</button>
-        <button type="button" class="remove" onclick="clearDiag()" data-i18n="diagClear">Effacer le journal</button>
+        <button type="button" onclick="copyDiag()" data-i18n="diagCopy">Copy</button>
+        <button type="button" class="remove" onclick="clearDiag()" data-i18n="diagClear">Clear the log</button>
       </div>
       <div class="searchStatus" id="diagCopyStatus"></div>
     </details>
   </fieldset>
 
   <p id="itemCount"></p>
-  <button type="button" onclick="save()" data-i18n="save">Enregistrer</button>
+  <button type="button" onclick="save()" data-i18n="save">Save</button>
 
 <script>
   var MAX_ITEMS = 8;
@@ -2853,7 +2853,7 @@ function afterAlertRefresh(config, lines, cache, previous, failed) {
 		const diff = alerts.diffMessages(seen || {}, current, now, seen === null);
 		localStorage.setItem(ALERTS_SEEN_KEY, JSON.stringify(diff.seen));
 		const texts =
-			ALERT_TEXTS[resolveLanguage(config.language)] || ALERT_TEXTS.fr;
+			ALERT_TEXTS[resolveLanguage(config.language)] || ALERT_TEXTS.en;
 		const byId = {};
 		for (const message of current) byId[message.id] = message;
 

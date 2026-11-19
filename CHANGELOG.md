@@ -11,6 +11,7 @@ with a plain-text version to paste into the store.
 ### Improvements
 
 - Pebble plugins are now on for everyone in the Pebble app, so the settings no longer ask you to turn them on; the permission explanations shown by the Pebble app are now in English.
+- English is now the default language everywhere (settings page, plugin, alerts) when your watch or phone is in neither English nor French; French stays fully supported.
 
 ## [2.0.0] - 2026-11-15
 
